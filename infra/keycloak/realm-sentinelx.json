@@ -1,0 +1,94 @@
+{
+  "realm": "sentinelx",
+  "enabled": true,
+  "displayName": "SentinelX",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "bruteForceProtected": true,
+  "passwordPolicy": "length(12) and notUsername",
+  "roles": {
+    "realm": [
+      {
+        "name": "sentinelx:SUPER_ADMIN",
+        "description": "SentinelX Super Admin"
+      },
+      {
+        "name": "sentinelx:TENANT_ADMIN",
+        "description": "SentinelX Tenant Admin"
+      },
+      {
+        "name": "sentinelx:SECURITY_ANALYST",
+        "description": "SentinelX Security Analyst"
+      },
+      {
+        "name": "sentinelx:IT_OPERATOR",
+        "description": "SentinelX It Operator"
+      },
+      {
+        "name": "sentinelx:VIEWER",
+        "description": "SentinelX Viewer"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "sentinelx-web",
+      "name": "SentinelX",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/api/v1/auth/oidc/callback",
+        "http://127.0.0.1:8000/api/v1/auth/oidc/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:8000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8000/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "sentinelx-web",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+# Secrets and local state
+.env
+.env.*
+!.env.example
+.sentinelx-admin.txt
+*.pem
+*.key
+*.p12
+*.crt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+
+# Node / web UI build output
+node_modules/
+apps/web/dist/
+*.tsbuildinfo
+
+# Lab captures stay local (only the README is tracked)
+infra/pcaps/*
+!infra/pcaps/README.md
+
+# Generated artifacts
+sbom*.json
+*.log
+
+# Editors, OS and tooling
+.vscode/
+.idea/
+*.swp
+*.local
+.DS_Store
+Thumbs.db
+.playwright-mcp/
+graphify-out/
+
+# Claude Code: CLAUDE.md is tracked, personal settings are not
+.claude/settings.local.json
+CLAUDE.local.md

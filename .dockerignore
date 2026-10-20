@@ -1,0 +1,14 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+apps/web/dist
+.env
+.env.*
+!.env.example
+.sentinelx-admin.txt
+.playwright-mcp
+.git
+*.log

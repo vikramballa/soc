@@ -1,0 +1,1 @@
+{"ts":1791019900.0,"note":"Scan::Port_Scan","msg":"10.10.30.66 scanned at least 15 unique ports of host 10.10.10.15 in 0m3s","sub":"local","src":"10.10.30.66","dst":"10.10.10.15","actions":["Notice::ACTION_LOG"]}

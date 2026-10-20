@@ -1,0 +1,44 @@
+title: New Local or Domain Account Created
+id: e99d4178-7d9a-4bb9-923d-7a3d6eee3c55
+status: stable
+description: A new user account was created. Attackers create accounts for persistence.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: user_management
+detection:
+  selection:
+    event_action: user_created
+  condition: selection
+falsepositives:
+  - Normal onboarding performed by IT
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1136
+---
+title: Account Added to a Privileged Group
+id: 9c5360fb-9d77-4ae4-a1c4-606e0ed21a8a
+status: stable
+description: An account was added to an administrative group (Administrators, Domain Admins, sudo, wheel).
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: user_management
+detection:
+  selection:
+    event_action: group_member_added
+  privileged:
+    - metadata.privileged_group: true
+    - metadata.group|contains:
+        - 'admin'
+        - 'sudo'
+        - 'wheel'
+  condition: selection and privileged
+falsepositives:
+  - Approved privilege changes by IT
+level: high
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.privilege_escalation

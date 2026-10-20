@@ -1,0 +1,155 @@
+# SentinelX — Docker Compose (development, lab and single-node production)
+#
+#   cp .env.example .env            # then set the passwords
+#   docker compose up -d            # core: postgres + sentinelx  → http://localhost:8000
+#   docker compose --profile ai up -d             # + Ollama in a container (or use Ollama on the host)
+#   docker compose --profile observability up -d  # + Prometheus + Grafana
+#   docker compose --profile search up -d         # + OpenSearch (optional telemetry search sink)
+#   docker compose --profile sso up -d            # + Keycloak (OIDC single sign-on)
+#   docker compose --profile sensors up -d        # + Suricata/Zeek replaying lab pcaps from infra/pcaps
+#   docker compose --profile full up -d           # everything (needs ~8 GB RAM)
+#
+# Nothing except the SentinelX web port is published on all interfaces; admin consoles bind to 127.0.0.1.
+
+name: sentinelx
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-production}
+  APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
+  API_CORS_ORIGINS: ${APP_BASE_URL:-http://localhost:8000}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+  DATABASE_URL: postgresql+asyncpg://sentinelx:${SENTINELX_DB_PASSWORD:?set SENTINELX_DB_PASSWORD}@postgres:5432/sentinelx
+  BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@sentinelx.local}
+  BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+  OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct}
+  OPENSEARCH_URL: ${OPENSEARCH_URL:-}
+  OPENSEARCH_USERNAME: ${OPENSEARCH_USERNAME:-}
+  OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-}
+  OPENSEARCH_VERIFY_TLS: ${OPENSEARCH_VERIFY_TLS:-true}
+  MISP_URL: ${MISP_URL:-}
+  MISP_API_KEY: ${MISP_API_KEY:-}
+  AUTH_MODE: ${AUTH_MODE:-local}
+  KEYCLOAK_URL: ${KEYCLOAK_URL:-}
+  KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+  SURICATA_EVE_PATH: ${SURICATA_EVE_PATH:-/var/log/sensors/suricata/eve.json}
+  ZEEK_LOG_DIR: ${ZEEK_LOG_DIR:-/var/log/sensors/zeek}
+  WAZUH_INDEXER_URL: ${WAZUH_INDEXER_URL:-}
+  WAZUH_INDEXER_USERNAME: ${WAZUH_INDEXER_USERNAME:-}
+  WAZUH_INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:-}
+  EMBEDDED_WORKER: "true"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
+      SENTINELX_DB_PASSWORD: ${SENTINELX_DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init-sentinelx.sh:/docker-entrypoint-initdb.d/10-sentinelx.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sentinelx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
+
+  sentinelx:
+    build:
+      context: .
+      dockerfile: infra/docker/sentinelx.Dockerfile
+    image: sentinelx:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *app-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - sensor-logs:/var/log/sensors:ro
+    ports:
+      - "${SENTINELX_BIND:-0.0.0.0}:${SENTINELX_PORT:-8000}:8000"
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai", "full"]
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+
+  opensearch:
+    image: opensearchproject/opensearch:2
+    profiles: ["search", "full"]
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD:-}
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    ports:
+      - "127.0.0.1:9200:9200"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ["sso", "full"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-}
+    volumes:
+      - ./infra/keycloak/realm-sentinelx.json:/opt/keycloak/data/import/realm-sentinelx.json:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  prometheus:
+    image: prom/prometheus:v3.0.0
+    profiles: ["observability", "full"]
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    profiles: ["observability", "full"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  # Lab sensors: replay authorized, self-generated pcaps from infra/pcaps (offline mode — works on any OS,
+  # including Docker Desktop on macOS/Windows where containers cannot sniff the host network).
+  suricata:
+    image: jasonish/suricata:7.0
+    profiles: ["sensors", "full"]
+    entrypoint: ["sh", "-c", "mkdir -p /var/log/sensors/suricata && for f in /pcaps/*.pcap; do [ -e \"$$f\" ] && suricata -r \"$$f\" -l /var/log/sensors/suricata -k none; done; sleep infinity"]
+    volumes:
+      - ./infra/pcaps:/pcaps:ro
+      - sensor-logs:/var/log/sensors
+
+  zeek:
+    image: zeek/zeek:7.0
+    profiles: ["sensors", "full"]
+    entrypoint: ["sh", "-c", "mkdir -p /var/log/sensors/zeek && cd /var/log/sensors/zeek && for f in /pcaps/*.pcap; do [ -e \"$$f\" ] && zeek -C -r \"$$f\" LogAscii::use_json=T; done; sleep infinity"]
+    volumes:
+      - ./infra/pcaps:/pcaps:ro
+      - sensor-logs:/var/log/sensors
+
+volumes:
+  pgdata:
+  ollama:
+  osdata:
+  sensor-logs:

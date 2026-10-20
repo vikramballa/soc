@@ -1,0 +1,79 @@
+title: Unusually Long DNS Label
+id: ed921ac4-d8e3-4b86-ab23-cbfeced24a5c
+status: stable
+description: A DNS query contains a label of 40+ characters, a pattern used by DNS tunneling and data exfiltration tools.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: dns
+detection:
+  selection:
+    QueryName|re: '(^|\.)[A-Za-z0-9_-]{40,}\.'
+  condition: selection
+falsepositives:
+  - Some CDN and anti-virus cloud lookups use long labels
+level: medium
+tags:
+  - attack.command_and_control
+  - attack.t1071.004
+  - attack.exfiltration
+  - attack.t1048.003
+---
+title: DNS Query to Dynamic DNS Provider
+id: 57e9f4cf-151c-4d41-984d-6e5e8f6776e7
+status: stable
+description: A host resolved a dynamic-DNS domain. Free dynamic DNS is frequently used for attacker infrastructure.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: dns
+detection:
+  selection:
+    QueryName|endswith:
+      - '.duckdns.org'
+      - '.no-ip.com'
+      - '.no-ip.org'
+      - '.ddns.net'
+      - '.hopto.org'
+      - '.zapto.org'
+      - '.dynu.net'
+      - '.serveo.net'
+      - '.ngrok.io'
+      - '.ngrok-free.app'
+      - '.trycloudflare.com'
+  condition: selection
+falsepositives:
+  - Home-lab services or legitimate tunnels used by developers
+level: medium
+tags:
+  - attack.command_and_control
+  - attack.t1568
+---
+title: DNS Query for Rarely Legitimate Top-Level Domain
+id: fa2960d4-972b-4d51-a18e-c348e379ee6d
+status: experimental
+description: A host resolved a domain under a TLD with a high abuse rate. Low severity on its own; meaningful in combination with other activity.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: dns
+detection:
+  selection:
+    QueryName|endswith:
+      - '.top'
+      - '.xyz'
+      - '.tk'
+      - '.gq'
+      - '.cf'
+      - '.ml'
+      - '.zip'
+      - '.mov'
+      - '.cyou'
+      - '.rest'
+  condition: selection
+falsepositives:
+  - Legitimate businesses using these TLDs
+level: low
+tags:
+  - attack.command_and_control
+  - attack.t1071.004

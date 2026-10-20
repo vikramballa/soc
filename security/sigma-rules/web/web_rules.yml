@@ -1,0 +1,26 @@
+title: Web Vulnerability Scanner User-Agent
+id: 65e7de79-1a19-4efa-8c10-1b8a49358609
+status: stable
+description: HTTP requests carried the user-agent of a well-known vulnerability scanner.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: webserver
+detection:
+  selection:
+    c-useragent|contains:
+      - 'sqlmap'
+      - 'nikto'
+      - 'Nmap Scripting Engine'
+      - 'masscan'
+      - 'nuclei'
+      - 'gobuster'
+      - 'dirbuster'
+      - 'wpscan'
+  condition: selection
+falsepositives:
+  - Authorized penetration tests
+level: medium
+tags:
+  - attack.reconnaissance
+  - attack.t1595.002

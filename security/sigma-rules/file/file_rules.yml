@@ -1,0 +1,66 @@
+title: File Modified
+id: be15557f-38e8-41d7-a452-fc4ae2edbdb0
+name: file_modified
+status: stable
+description: File integrity monitoring observed a file being modified, created or deleted. Not alerting on its own; feeds the mass-modification correlation.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: file_change
+detection:
+  selection:
+    event_action:
+      - modified
+      - added
+      - deleted
+  condition: selection
+level: informational
+tags:
+  - attack.impact
+---
+title: Mass File Modification on One Host
+id: 3fa1dafb-39bf-440a-8586-8b5e960a43fd
+status: stable
+description: Fifty or more different files changed on one host within 2 minutes. This is consistent with ransomware encryption or destructive activity, and also with large software updates.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: value_count
+  rules:
+    - file_modified
+  group-by:
+    - hostname
+  timespan: 2m
+  condition:
+    field: file_path
+    gte: 50
+falsepositives:
+  - Software updates, package installs, large file syncs
+level: high
+tags:
+  - attack.impact
+  - attack.t1486
+---
+title: Ransom Note Style File Created
+id: 5d361c36-bf2d-42f8-8eff-034762abb3b8
+status: experimental
+description: A file with a name typical of ransomware recovery instructions was written.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: file_change
+detection:
+  selection:
+    TargetFilename|contains:
+      - 'HOW_TO_DECRYPT'
+      - 'README_DECRYPT'
+      - 'RESTORE_FILES'
+      - 'HOW_TO_RECOVER'
+      - 'DECRYPT_INSTRUCTIONS'
+  condition: selection
+falsepositives:
+  - Security awareness training material
+level: high
+tags:
+  - attack.impact
+  - attack.t1486

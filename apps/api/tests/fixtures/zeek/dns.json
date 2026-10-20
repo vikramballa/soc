@@ -1,0 +1,2 @@
+{"ts":1791019802.1,"uid":"CDns01","id.orig_h":"10.10.20.17","id.orig_p":53001,"id.resp_h":"10.10.0.2","id.resp_p":53,"proto":"udp","query":"xkqzvbtrwplmn8z2.info","qtype_name":"A","rcode_name":"NXDOMAIN","answers":[]}
+{"ts":1791019803.1,"uid":"CDns02","id.orig_h":"10.10.20.17","id.orig_p":53002,"id.resp_h":"10.10.0.2","id.resp_p":53,"proto":"udp","query":"aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgZXhmaWx0cmF0aW9uIGNodW5r.t.example.net","qtype_name":"TXT","rcode_name":"NOERROR"}

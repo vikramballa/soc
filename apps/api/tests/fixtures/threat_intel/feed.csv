@@ -1,0 +1,5 @@
+type,value,confidence,verdict,tags,description
+ip,198.51.100.23,90,malicious,c2;synthetic,Synthetic C2
+domain,sync-update.duckdns.org,0.85,malicious,c2,Synthetic domain
+,203.0.113.77,,suspicious,bruteforce,
+bogus,not an indicator,,,

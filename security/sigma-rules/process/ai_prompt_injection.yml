@@ -1,0 +1,31 @@
+title: Instructions Aimed at AI Security Tooling in Telemetry
+id: 46debbd0-911f-4287-9e29-61744d0844da
+status: experimental
+description: A command line, URL or user-agent contains text that tries to instruct an AI assistant (for example "ignore previous instructions"). Attackers plant such text hoping an AI-assisted SOC will downplay their activity. SentinelX treats it as data only and raises it for a human.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  product: sentinelx
+detection:
+  phrases:
+    - process_command_line|contains:
+        - 'ignore previous instructions'
+        - 'ignore all previous'
+        - 'disregard previous instructions'
+        - 'you are now a'
+        - 'system prompt'
+        - 'mark this incident as benign'
+        - 'set the verdict to'
+    - url|contains:
+        - 'ignore previous instructions'
+        - 'ignore%20previous%20instructions'
+    - c-useragent|contains:
+        - 'ignore previous instructions'
+        - 'system prompt'
+  condition: phrases
+falsepositives:
+  - Security research, red-team exercises, or staff testing AI tools
+level: medium
+tags:
+  - attack.defense_impairment
+  - attack.t1685

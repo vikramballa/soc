@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://sentinelx:sentinelx@127.0.0.1:5432/sentinelx_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Create least-privileged test role (RLS must not be bypassed)
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE ROLE sentinelx LOGIN PASSWORD 'sentinelx' NOSUPERUSER NOBYPASSRLS"
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c "CREATE DATABASE sentinelx_test OWNER sentinelx"
+      - name: Install
+        working-directory: apps/api
+        run: uv sync --python 3.12
+      - name: Lint
+        working-directory: apps/api
+        run: uv run ruff check src tests migrations && uv run ruff format --check src tests migrations
+      - name: Tests
+        working-directory: apps/api
+        run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - working-directory: apps/web
+        run: npm ci && npx tsc -b && npm run build
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image
+        run: docker build -f infra/docker/sentinelx.Dockerfile -t sentinelx:ci .
+      - name: Container & dependency scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sentinelx:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: sentinelx:ci
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json

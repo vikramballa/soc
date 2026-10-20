@@ -1,0 +1,109 @@
+title: Failed Logon
+id: b8f9df20-a50a-4943-8542-ceca8c6d3347
+name: failed_logon
+status: stable
+description: A single failed authentication attempt. Not alerting on its own; feeds the brute-force and password-spray correlations.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: authentication
+  product: sentinelx
+detection:
+  selection:
+    outcome: failure
+  condition: selection
+level: low
+tags:
+  - attack.credential_access
+---
+title: Successful Logon
+id: 03f1685c-cc9f-4f5b-8cc0-a5e1a54d3100
+name: successful_logon
+status: stable
+description: A successful authentication. Not alerting on its own; used to detect success after a brute-force burst.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: authentication
+  product: sentinelx
+detection:
+  selection:
+    outcome: success
+  condition: selection
+level: informational
+tags:
+  - attack.initial_access
+---
+title: Repeated Failed Logons Against an Account
+id: 3bc71d47-dfa6-487d-af1a-fb4baa0f3dfd
+name: brute_force_logon
+status: stable
+description: Ten or more failed logons for the same account on the same host within 10 minutes, consistent with password guessing.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: event_count
+  rules:
+    - failed_logon
+  group-by:
+    - username
+    - hostname
+  timespan: 10m
+  condition:
+    gte: 10
+falsepositives:
+  - A user repeatedly mistyping an expired password
+  - Misconfigured service with stale credentials
+level: medium
+tags:
+  - attack.credential_access
+  - attack.t1110
+  - attack.t1110.001
+---
+title: Successful Logon After Repeated Failures
+id: 18ac3df3-a55b-4ff7-8cb4-964aa47c1145
+name: logon_after_brute_force
+status: stable
+description: An account successfully authenticated shortly after a burst of failed attempts. The password may have been guessed.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: temporal_ordered
+  rules:
+    - brute_force_logon
+    - successful_logon
+  group-by:
+    - username
+  timespan: 30m
+falsepositives:
+  - The legitimate user finally remembered their password
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1110
+  - attack.initial_access
+  - attack.t1078
+---
+title: Password Spraying From a Single Source
+id: e2076682-17b1-46c5-94e7-d66c021da9d8
+name: password_spray
+status: stable
+description: Failed logons for eight or more different accounts from one source address within 10 minutes.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: value_count
+  rules:
+    - failed_logon
+  group-by:
+    - src_ip
+  timespan: 10m
+  condition:
+    field: username
+    gte: 8
+falsepositives:
+  - Shared NAT gateway or VPN concentrator with many users mistyping passwords
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1110.003

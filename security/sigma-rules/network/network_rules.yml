@@ -1,0 +1,145 @@
+title: Outbound Connection to Uncommon Port
+id: a68b24c9-5f0f-4016-8815-3f68fd15d6dc
+status: stable
+description: A host connected to an external address on a port commonly used by remote-access tools and reverse shells.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: network_connection
+detection:
+  selection:
+    DestinationPort:
+      - 4444
+      - 1337
+      - 31337
+      - 6666
+      - 6667
+      - 5555
+      - 9001
+      - 2222
+  internal_dest:
+    - DestinationIp|cidr: '10.0.0.0/8'
+    - DestinationIp|cidr: '172.16.0.0/12'
+    - DestinationIp|cidr: '192.168.0.0/16'
+    - DestinationIp|cidr: '127.0.0.0/8'
+  attempt:
+    event_action: connection_attempt
+  condition: selection and not internal_dest and not attempt
+falsepositives:
+  - Developer tools or games using these ports
+level: high
+tags:
+  - attack.command_and_control
+  - attack.t1571
+---
+title: Large Outbound Data Transfer
+id: 0966d318-cb2a-4072-948f-1f24cbbb194d
+status: stable
+description: A single connection sent more than 50 MB to an external address.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: network_connection
+detection:
+  selection:
+    bytes_out|gte: 50000000
+  internal_dest:
+    - DestinationIp|cidr: '10.0.0.0/8'
+    - DestinationIp|cidr: '172.16.0.0/12'
+    - DestinationIp|cidr: '192.168.0.0/16'
+  condition: selection and not internal_dest
+falsepositives:
+  - Backups or uploads to sanctioned cloud storage
+level: medium
+tags:
+  - attack.exfiltration
+  - attack.t1048
+---
+title: Unanswered Connection Attempt
+id: 4f70ce0e-84e8-4e87-b1a5-1fd8fa0e933b
+name: connection_attempt
+status: stable
+description: A connection attempt that was rejected or never answered. Not alerting on its own; feeds scan detection.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: network_connection
+detection:
+  selection:
+    event_action: connection_attempt
+  condition: selection
+level: informational
+tags:
+  - attack.discovery
+---
+title: Port Scan From a Single Source
+id: dc564229-306b-4f88-90cb-8e65e321657d
+status: stable
+description: One source tried twenty or more different ports on the same target within 2 minutes.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: value_count
+  rules:
+    - connection_attempt
+  group-by:
+    - src_ip
+    - dest_ip
+  timespan: 2m
+  condition:
+    field: dest_port
+    gte: 20
+falsepositives:
+  - Authorized vulnerability scanners
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1046
+---
+title: Network Host Sweep
+id: 10df1b94-50a6-4b30-8c23-aa5470d9e1fc
+status: stable
+description: One source attempted connections to fifteen or more different hosts within 5 minutes.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: value_count
+  rules:
+    - connection_attempt
+  group-by:
+    - src_ip
+  timespan: 5m
+  condition:
+    field: dest_ip
+    gte: 15
+falsepositives:
+  - Asset discovery / monitoring tools
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1018
+---
+title: IDS Scan Signature
+id: 0be9ccd7-7daa-4b33-8dad-d553200d611a
+status: stable
+description: Suricata or Zeek reported scanning activity.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: ids_alert
+detection:
+  suricata:
+    rule_name|contains:
+      - 'ET SCAN'
+      - 'GPL SCAN'
+  zeek:
+    rule_id|startswith: 'Scan::'
+  condition: suricata or zeek
+falsepositives:
+  - Authorized scanners
+level: medium
+tags:
+  - attack.reconnaissance
+  - attack.t1595
+  - attack.discovery
+  - attack.t1046

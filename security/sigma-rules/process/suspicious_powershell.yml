@@ -1,0 +1,51 @@
+title: Suspicious PowerShell Command Line
+id: ee71e69d-9a6d-45ba-b784-e94261bb0053
+status: stable
+description: PowerShell started with an encoded command, hidden window, execution-policy bypass or a download cradle — techniques common in malicious scripts.
+author: SentinelX
+date: 2026-10-06
+references:
+  - https://attack.mitre.org/techniques/T1059/001/
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_img:
+    - Image|endswith:
+        - '\powershell.exe'
+        - '\pwsh.exe'
+    - OriginalFileName:
+        - 'PowerShell.EXE'
+        - 'pwsh.dll'
+  susp_encoded:
+    CommandLine|windash|contains:
+      - ' -enc '
+      - ' -encodedcommand '
+      - ' -ec '
+  susp_cradle:
+    CommandLine|contains:
+      - 'DownloadString('
+      - 'DownloadFile('
+      - 'Invoke-WebRequest'
+      - 'IEX('
+      - 'IEX ('
+      - 'Invoke-Expression'
+      - 'Net.WebClient'
+      - 'Start-BitsTransfer'
+  susp_stealth:
+    CommandLine|windash|contains|all:
+      - ' -nop'
+      - ' -w hidden'
+  susp_bypass:
+    CommandLine|windash|contains:
+      - ' -ep bypass'
+      - ' -executionpolicy bypass'
+  condition: selection_img and 1 of susp_*
+falsepositives:
+  - Administrative or software-deployment scripts that use encoded commands
+level: high
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.stealth
+  - attack.t1027.010

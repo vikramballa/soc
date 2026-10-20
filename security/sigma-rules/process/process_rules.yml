@@ -1,0 +1,233 @@
+title: Office Application Spawned a Command Interpreter
+id: 5fd492fe-4c96-4d61-bf05-3e7a37a0063d
+status: stable
+description: A Microsoft Office program started a shell or script host. This is typical of malicious macro documents.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  parent:
+    ParentImage|endswith:
+      - '\winword.exe'
+      - '\excel.exe'
+      - '\powerpnt.exe'
+      - '\outlook.exe'
+      - '\onenote.exe'
+  child:
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+      - '\mshta.exe'
+      - '\rundll32.exe'
+      - '\regsvr32.exe'
+  condition: parent and child
+falsepositives:
+  - Legitimate add-ins that shell out (rare)
+level: high
+tags:
+  - attack.execution
+  - attack.t1204.002
+  - attack.initial_access
+  - attack.t1566.001
+---
+title: Discovery Command Executed
+id: 4c9d7a1a-d200-4938-beda-84b2f8555584
+name: discovery_command
+status: stable
+description: A built-in account or system discovery utility was executed. Common for admins; suspicious when several run in quick succession.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: process_creation
+detection:
+  tools:
+    Image|endswith:
+      - '\whoami.exe'
+      - '\systeminfo.exe'
+      - '\nltest.exe'
+      - '\ipconfig.exe'
+      - '\quser.exe'
+      - '\tasklist.exe'
+      - '/whoami'
+      - '/id'
+      - '/uname'
+  net_enum:
+    Image|endswith:
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains:
+      - ' user'
+      - ' group'
+      - ' localgroup'
+      - ' view'
+  condition: tools or net_enum
+level: low
+tags:
+  - attack.discovery
+  - attack.t1033
+  - attack.t1087
+  - attack.t1082
+---
+title: Burst of Discovery Commands on One Host
+id: 9c8ce540-79d9-40cb-aa3c-b2f660c4a297
+name: discovery_burst
+status: stable
+description: Four or more different discovery utilities ran on the same host within 10 minutes — typical hands-on-keyboard reconnaissance after an intrusion.
+author: SentinelX
+date: 2026-10-06
+correlation:
+  type: value_count
+  rules:
+    - discovery_command
+  group-by:
+    - hostname
+  timespan: 10m
+  condition:
+    field: process_name
+    gte: 4
+falsepositives:
+  - IT staff troubleshooting a machine
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1087
+  - attack.t1082
+---
+title: Possible LSASS Credential Dumping
+id: 9efe8d95-4f1a-4cf7-99a6-2aa5eb9f44da
+status: stable
+description: A command line references dumping the LSASS process memory, which holds credentials.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  procdump:
+    CommandLine|contains|all:
+      - ' -ma '
+      - 'lsass'
+  comsvcs:
+    CommandLine|contains|all:
+      - 'comsvcs'
+      - 'MiniDump'
+  mimikatz:
+    CommandLine|contains:
+      - 'sekurlsa::'
+      - 'lsadump::'
+  condition: 1 of them
+falsepositives:
+  - Authorized forensic collection
+level: critical
+tags:
+  - attack.credential_access
+  - attack.t1003.001
+---
+title: Security Event Log Cleared
+id: 41bc2423-1001-443b-b2a5-619ae7c86b8c
+status: stable
+description: Windows event logs were cleared, removing forensic evidence.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  product: windows
+detection:
+  event:
+    event_action: log_cleared
+  cmd:
+    CommandLine|contains:
+      - 'wevtutil cl'
+      - 'wevtutil.exe cl'
+      - 'Clear-EventLog'
+  condition: event or cmd
+falsepositives:
+  - Planned log maintenance
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685.005
+---
+title: Shadow Copies or Recovery Disabled
+id: dcb3a43c-83a8-4de0-abe8-701394382ec4
+status: stable
+description: Volume shadow copies were deleted or Windows recovery was disabled — a common ransomware preparation step.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  vss:
+    CommandLine|contains|all:
+      - 'shadow'
+      - 'delete'
+  bcdedit:
+    CommandLine|contains|all:
+      - 'bcdedit'
+      - 'recoveryenabled'
+      - 'no'
+  condition: vss or bcdedit
+falsepositives:
+  - Backup software maintenance
+level: critical
+tags:
+  - attack.impact
+  - attack.t1490
+---
+title: Remote Script Piped to Shell
+id: dcc0d4e2-638b-4de5-91c7-919b5d31e869
+status: stable
+description: A script was downloaded with curl or wget and executed directly by a shell.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  download:
+    CommandLine|contains:
+      - 'curl '
+      - 'wget '
+  pipe:
+    CommandLine|re: '\|\s*(sudo\s+)?(ba|z|da)?sh\b'
+  condition: download and pipe
+falsepositives:
+  - Software installers documented to be installed this way
+level: high
+tags:
+  - attack.execution
+  - attack.t1059.004
+  - attack.command_and_control
+  - attack.t1105
+---
+title: Sudo Used to Obtain a Root Shell
+id: ebe31337-044b-49ea-bb7b-1d3ddf6da596
+status: stable
+description: sudo was used to start an interactive root shell.
+author: SentinelX
+date: 2026-10-06
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    event_action: sudo
+    CommandLine|endswith:
+      - '/bin/bash'
+      - '/bin/sh'
+      - '/bin/zsh'
+      - ' su'
+      - ' su -'
+      - ' -i'
+  condition: selection
+falsepositives:
+  - Administrators performing maintenance
+level: medium
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.003

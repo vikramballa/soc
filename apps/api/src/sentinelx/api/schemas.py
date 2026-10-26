@@ -290,6 +290,7 @@ class UserOut(ORM):
     role: str
     auth_provider: str
     is_active: bool
+    locked_until: datetime | None = None
     last_login_at: datetime | None
     created_at: datetime
 

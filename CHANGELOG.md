@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+- Access control: incidents can only be assigned to people whose role can work them (viewers are
+  read-only); completed watchlist/mark response actions can no longer be toggled back to "open"; rule
+  dry-runs need `event:read` because they return event samples; internal service addresses (Ollama,
+  MISP, OpenSearch, Keycloak) are shown only to administrators.
+- Administration: reset a user's password (also unlocks and signs them out everywhere) and unlock
+  locked accounts; locked accounts are flagged in the user list.
+- My account page: role, what it allows in plain language, active sessions with sign-out per session or
+  for all other sessions.
+- Incidents: "Assigned to me" / "Unassigned" owner filter (`assignee` query parameter); the dashboard links
+  to the incidents you own.
+- Fix: the synthetic Zeek `conn.log` test fixture was excluded by `.gitignore` and is now tracked.
+
 ## 0.1.0 — 2026-10-06
 First release.
 - Ingestion: Wazuh (indexer polling, alerts.json, push), Suricata EVE JSON, Zeek JSON/TSV; canonical

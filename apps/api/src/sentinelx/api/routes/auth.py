@@ -20,7 +20,7 @@ from sentinelx.persistence.models import Tenant, User
 from sentinelx.security import oidc
 from sentinelx.security.passwords import hash_password, new_token, password_problems, token_hash, verify_password
 from sentinelx.security.ratelimit import limiter
-from sentinelx.security.rbac import ROLE_DESCRIPTIONS, Perm, Role
+from sentinelx.security.rbac import PERM_DESCRIPTIONS, ROLE_DESCRIPTIONS, Perm, Role
 from sentinelx.services.audit import audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -206,7 +206,87 @@ async def me(principal: Principal = Depends(get_principal)) -> dict[str, Any]:
         else None,
         "home_tenant_id": str(principal.home_tenant_id),
         "tenants": tenants,
+        # what this role can and cannot do, in plain language (the server enforces it either way)
+        "access": [
+            {"permission": str(p), "description": d, "granted": principal.can(p)} for p, d in PERM_DESCRIPTIONS.items()
+        ],
     }
+
+
+@router.get("/sessions")
+async def my_sessions(principal: Principal = Depends(get_principal)) -> list[dict[str, Any]]:
+    """The signed-in user's own active sessions (browsers/devices), newest first."""
+    async with system_session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(DbSession)
+                    .where(
+                        DbSession.user_id == principal.user_id,
+                        DbSession.revoked_at.is_(None),
+                        DbSession.expires_at > datetime.now(UTC),
+                    )
+                    .order_by(DbSession.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "id": str(r.id),
+            "created_at": r.created_at,
+            "expires_at": r.expires_at,
+            "ip": r.ip,
+            "user_agent": r.user_agent,
+            "current": r.id == principal.session_id,
+        }
+        for r in rows
+    ]
+
+
+async def _revoke_own(request: Request, principal: Principal, *conds: Any) -> int:
+    async with system_session() as db:
+        res = await db.execute(
+            update(DbSession)
+            .where(DbSession.user_id == principal.user_id, DbSession.revoked_at.is_(None), *conds)
+            .values(revoked_at=datetime.now(UTC))
+        )
+        n = int(getattr(res, "rowcount", 0) or 0)
+    if not n:
+        return 0
+    async with tenant_session(principal.home_tenant_id) as tdb:
+        await audit(
+            tdb,
+            action="auth.sessions_revoked",
+            resource_type="user",
+            resource_id=principal.user_id,
+            actor=principal.email,
+            actor_id=principal.user_id,
+            tenant_id=principal.home_tenant_id,
+            details={"count": n},
+            source_ip=client_ip(request),
+        )
+    return n
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def revoke_session(
+    session_id: uuid.UUID, request: Request, principal: Principal = Depends(get_principal)
+) -> None:
+    """Sign out one of your *other* sessions. Use sign-out for the current one."""
+    if session_id == principal.session_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Use Sign out to end the session you are using")
+    # Scoped to the caller's own sessions: another user's session id simply matches nothing.
+    if not await _revoke_own(request, principal, DbSession.id == session_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+
+
+@router.post("/sessions/revoke-others")
+async def revoke_other_sessions(request: Request, principal: Principal = Depends(get_principal)) -> dict[str, Any]:
+    """Sign out everywhere except this browser - e.g. after using a shared computer."""
+    conds = [DbSession.id != principal.session_id] if principal.session_id else []
+    return {"revoked": await _revoke_own(request, principal, *conds)}
 
 
 @router.post("/password")

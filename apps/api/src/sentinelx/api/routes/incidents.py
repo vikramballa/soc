@@ -47,7 +47,7 @@ from sentinelx.persistence.models import (
     User,
 )
 from sentinelx.reports.incident_report import build_report, render_html
-from sentinelx.security.rbac import Perm
+from sentinelx.security.rbac import ROLE_PERMISSIONS, Perm, permissions_for
 from sentinelx.services.audit import audit
 from sentinelx.threat_intel.service import classify_indicator, import_indicators, normalize_indicator
 
@@ -78,13 +78,19 @@ def _activity(db: AsyncSession, inc: Incident, kind: str, actor: str, message: s
 
 
 async def _check_assignee(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
-    """Assignees must be active members of this organization (or a super admin, who can work in any)."""
+    """Assignees must be active members of this organization (or a super admin, who can work in any) whose
+    role can actually work the incident - owning an incident you cannot update is a dead end."""
     async with system_session() as sdb:
         u = await sdb.get(User, user_id)
         ok = u is not None and u.is_active and (u.tenant_id == tenant_id or u.role == "SUPER_ADMIN")
+        can_work = u is not None and Perm.INCIDENT_UPDATE in permissions_for(u.role)
     if not ok:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "Assignee must be an active member of this organization"
+        )
+    if not can_work:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Assignee's role cannot work incidents (viewers are read-only)"
         )
 
 
@@ -99,7 +105,7 @@ async def assignees(
             .where(
                 User.tenant_id == principal.tenant_id,
                 User.is_active.is_(True),
-                User.role.in_(["IT_OPERATOR", "SECURITY_ANALYST", "TENANT_ADMIN", "SUPER_ADMIN"]),
+                User.role.in_([r.value for r, perms in ROLE_PERMISSIONS.items() if Perm.INCIDENT_UPDATE in perms]),
             )
             .order_by(User.display_name)
         )
@@ -119,6 +125,7 @@ async def list_incidents(
     host: str | None = None,
     user: str | None = None,
     technique: str | None = None,
+    assignee: str | None = Query(None, description="me | unassigned | a user id"),
     sort: str = Query("priority", pattern="^(priority|newest|updated|risk)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -138,6 +145,17 @@ async def list_incidents(
         stmt = stmt.where(Incident.category == category)
     if technique:
         stmt = stmt.where(Incident.mitre_techniques.any(technique.upper()))
+    if assignee == "me":
+        stmt = stmt.where(Incident.assigned_to == principal.user_id)
+    elif assignee == "unassigned":
+        stmt = stmt.where(Incident.assigned_to.is_(None))
+    elif assignee:
+        try:
+            stmt = stmt.where(Incident.assigned_to == uuid.UUID(assignee))
+        except ValueError as e:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "assignee must be me, unassigned or a user id"
+            ) from e
     if q:
         like = f"%{q}%"
         num = q.upper().removeprefix("INC-")
@@ -638,12 +656,13 @@ async def incident_context(
         "mitre": [
             {
                 "id": t,
-                "name": catalog.get(t).name if catalog.get(t) else t,
-                "tactics": list(catalog.get(t).tactics) if catalog.get(t) else [],
-                "url": catalog.get(t).url if catalog.get(t) else None,
+                "name": tech.name if tech else t,
+                "tactics": list(tech.tactics) if tech else [],
+                "url": tech.url if tech else None,
                 "alerts": [a.title for a in alerts if t in (a.mitre_techniques or [])],
             }
             for t in inc.mitre_techniques
+            for tech in [catalog.get(t)]
         ],
         "graph": {"nodes": nodes, "edges": edges},
     }
@@ -829,6 +848,9 @@ async def complete_task(
     act = await db.get(ResponseAction, action_id)
     if act is None or act.incident_id != incident_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Action not found")
+    if act.kind != "task":
+        # watchlist entries and marks are records of something already done, not to-dos to re-open
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only tasks can be marked done or re-opened")
     act.status = "completed" if act.status != "completed" else "open"
     act.completed_at = datetime.now(UTC) if act.status == "completed" else None
     await audit(

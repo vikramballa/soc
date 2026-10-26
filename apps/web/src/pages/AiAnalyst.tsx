@@ -81,7 +81,10 @@ export default function AiAnalyst() {
           </div>
         </Card>
         <Card className="lg:col-span-2">
-          <CardHeader title="Investigate an open incident" subtitle="Open an incident and use the AI analyst tab" />
+          <CardHeader
+            title={can('ai:investigate') ? 'Investigate an open incident' : 'Read AI findings on an open incident'}
+            subtitle={can('ai:investigate') ? 'Open an incident and use the AI analyst tab' : 'Your role can read existing AI investigations. Starting a new one needs the security analyst role.'}
+          />
           {!incs.data ? <Skeleton className="m-4 h-32" /> : !incs.data.items.length ? <EmptyState title="No open incidents" /> : (
             <ul className="divide-y divide-line border-t border-line">
               {incs.data.items.map((i) => (

@@ -82,7 +82,8 @@ export default function Integrations() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {q.data.telemetry.map((t) => {
               const info = SOURCE_INFO[t.name]
-              const live = t.last_ingest_at && Date.now() - new Date(t.last_ingest_at).getTime() < 15 * 60_000
+              // measured against when the data was fetched, which keeps rendering pure
+              const live = t.last_ingest_at && q.dataUpdatedAt - new Date(t.last_ingest_at).getTime() < 15 * 60_000
               return (
                 <button key={t.name} onClick={() => setSrc(t.name)} className={clsx('press rounded-xl border bg-surface p-4 text-left shadow-[var(--shadow)]', src === t.name ? 'border-accent/50 ring-2 ring-accent/15' : 'border-line hover:border-line-strong')}>
                   <div className="flex items-center justify-between">

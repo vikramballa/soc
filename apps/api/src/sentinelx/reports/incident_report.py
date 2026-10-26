@@ -168,10 +168,11 @@ async def build_report(db: AsyncSession, inc: Incident) -> dict[str, Any]:
             "mitre_attack": [
                 {
                     "id": t,
-                    "name": catalog.get(t).name if catalog.get(t) else t,
-                    "tactics": list(catalog.get(t).tactics) if catalog.get(t) else [],
+                    "name": tech.name if tech else t,
+                    "tactics": list(tech.tactics) if tech else [],
                 }
                 for t in inc.mitre_techniques
+                for tech in [catalog.get(t)]
             ],
             "threat_intelligence": [
                 {"indicator": r.value, "provider": r.provider, "verdict": r.verdict, "confidence": r.confidence}

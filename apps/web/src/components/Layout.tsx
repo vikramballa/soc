@@ -21,12 +21,14 @@ import {
   Settings,
   ShieldAlert,
   Sun,
+  UserRound,
   Users,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { api, setTenantOverride } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { ROLE_LABEL } from '../lib/format'
 import { CommandPalette } from './CommandPalette'
 import { Modal } from './overlay'
 import { toast, toastError } from './toast'
@@ -177,7 +179,7 @@ function OrgSwitcher() {
   )
 }
 
-function PasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function PasswordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [cur, setCur] = useState('')
   const [next, setNext] = useState('')
   const [busy, setBusy] = useState(false)
@@ -246,9 +248,12 @@ function UserMenu() {
           <div className="px-2.5 py-2">
             <div className="truncate text-[13px] font-medium">{me.user.display_name}</div>
             <div className="truncate text-[12px] text-faint">{me.user.email}</div>
-            <Badge tone="accent" className="mt-1.5">{me.user.role.replace('_', ' ').toLowerCase()}</Badge>
+            <Badge tone="accent" className="mt-1.5">{ROLE_LABEL[me.user.role] ?? me.user.role}</Badge>
           </div>
           <div className="my-1 h-px bg-line" />
+          <button onClick={() => { setOpen(false); nav('/account') }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-muted hover:bg-surface-2 hover:text-fg">
+            <UserRound className="size-4" /> My account &amp; access
+          </button>
           {me.user.auth_provider === 'local' && (
             <button onClick={() => { setPw(true); setOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-muted hover:bg-surface-2 hover:text-fg">
               <KeyRound className="size-4" /> Change password
@@ -265,7 +270,7 @@ function UserMenu() {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { can, me } = useAuth()
+  const { can, me, isSuperAdmin } = useAuth()
   const [theme, toggleTheme] = useTheme()
   const [palette, setPalette] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
@@ -319,9 +324,10 @@ export function Layout({ children }: { children: ReactNode }) {
           )
         })}
       </div>
-      <div className="border-t border-line px-4 py-3 text-[11.5px] text-faint">
+      <NavLink to="/account" className="block border-t border-line px-4 py-3 text-[11.5px] text-faint hover:bg-surface-2/60" title="Your account, role and access">
         Signed in as <span className="text-muted">{me.user.display_name}</span>
-      </div>
+        <span className="block text-faint">{ROLE_LABEL[me.user.role] ?? me.user.role} · view my access</span>
+      </NavLink>
     </nav>
   )
 
@@ -358,7 +364,8 @@ export function Layout({ children }: { children: ReactNode }) {
         </header>
         {me.tenant?.demo && (
           <div className="border-b border-ai/20 bg-ai-soft px-6 py-1.5 text-[12px] text-ai">
-            You are viewing the <b>Demo Lab</b> — every event here is synthetic and clearly labelled. Switch organization in the sidebar to see your real data.
+            You are viewing the <b>Demo Lab</b> — every event here is synthetic and clearly labelled.
+            {isSuperAdmin ? ' Switch organization in the sidebar to see your real data.' : ' It is safe to explore and practise here.'}
           </div>
         )}
         <main className="min-h-0 flex-1 overflow-y-auto">

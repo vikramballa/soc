@@ -86,6 +86,8 @@ export function riskBand(score: number): Severity {
   return 'informational'
 }
 
+export const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super admin', TENANT_ADMIN: 'Admin', SECURITY_ANALYST: 'Security analyst', IT_OPERATOR: 'IT operator', VIEWER: 'Viewer' }
+
 export const SEVERITY_LABEL: Record<Severity, string> = {
   critical: 'Critical',
   high: 'High',

@@ -21,6 +21,7 @@ const AiAnalyst = lazy(() => import('./pages/AiAnalyst'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Integrations = lazy(() => import('./pages/Integrations'))
 const Admin = lazy(() => import('./pages/Admin'))
+const Account = lazy(() => import('./pages/Account'))
 
 function FullPageLoader() {
   return (
@@ -56,6 +57,7 @@ export default function App() {
                     <Route path="ai" element={<AiAnalyst />} />
                     <Route path="reports" element={<RequirePerm perm="report:generate"><Reports /></RequirePerm>} />
                     <Route path="integrations" element={<Integrations />} />
+                    <Route path="account" element={<Account />} />
                     <Route path="admin" element={<RequirePerm perm="admin:manage"><Admin /></RequirePerm>} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>

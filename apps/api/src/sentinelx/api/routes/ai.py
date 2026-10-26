@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sentinelx.ai.ollama import LlmUnavailable, OllamaClient
 from sentinelx.ai.service import model_for_tenant
 from sentinelx.api.deps import Principal, client_ip, get_db, require
+from sentinelx.api.routes.analytics import redact_ai_reason
 from sentinelx.api.schemas import AiInvestigationOut, FeedbackIn
 from sentinelx.config import get_settings
 from sentinelx.persistence.models import AiInvestigation, Tenant
@@ -59,9 +60,9 @@ async def status_(
     return {
         "enabled": get_settings().ai_enabled,
         "available": st.get("available", False),
-        "reason": st.get("reason"),
+        "reason": redact_ai_reason(st.get("reason"), principal.can(Perm.ADMIN_MANAGE)),
         "model": model,
-        "ollama_url": get_settings().ollama_url,
+        "ollama_url": get_settings().ollama_url if principal.can(Perm.ADMIN_MANAGE) else None,
         "local_models": models,
         "core_detection": "operational",
         "quality": {

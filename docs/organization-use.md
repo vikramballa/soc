@@ -143,6 +143,14 @@ Give each person only the access they need.
 Admins can create analysts, operators and viewers. Only a super admin can create other admins.
 Every important action is written to the **audit log**, which nobody can edit or delete.
 
+Only people whose role can work incidents (IT operator and above) can be made an incident's owner; viewers
+are read-only. Everyone can open **My account** (click your name at the bottom of the sidebar) to see
+exactly what their role allows, and to sign out sessions on other computers.
+
+**Someone forgot their password or is locked out?** On **Administration → Users**, click **Reset password**
+(this also unlocks the account and signs them out everywhere) or **Unlock** if they still know it. Admins
+can do this for the roles below their own; for another admin, ask a super admin.
+
 ---
 
 ## 7. Weekly and monthly habits

@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinelx.api.deps import Principal, client_ip, get_db, require
-from sentinelx.api.routes.analytics import ai_status, worker_status
+from sentinelx.api.routes.analytics import ai_status, redact_ai_reason, worker_status
 from sentinelx.api.schemas import AuditOut, Page, UserIn, UserOut, UserPatch
 from sentinelx.config import get_settings
 from sentinelx.persistence.db import system_session
@@ -39,6 +39,10 @@ class TenantSettingsIn(BaseModel):
     correlation_window_minutes: int | None = Field(None, ge=5, le=1440)
     correlation_ignore: list[str] | None = Field(None, max_length=200)
     event_retention_days: int | None = Field(None, ge=1, le=3650)
+
+
+class PasswordResetIn(BaseModel):
+    password: str = Field(min_length=12, max_length=256)
 
 
 class TokenIn(BaseModel):
@@ -133,11 +137,7 @@ async def update_user(
     for k, v in changes.items():
         setattr(user, k, v)
     if changes.get("is_active") is False:
-        await db.execute(
-            update(Session)
-            .where(Session.user_id == user.id, Session.revoked_at.is_(None))
-            .values(revoked_at=datetime.now(UTC))
-        )
+        await _revoke_sessions(db, user.id)
     await audit(
         db,
         action="user.update",
@@ -147,6 +147,85 @@ async def update_user(
         actor_id=principal.user_id,
         tenant_id=principal.tenant_id,
         details=changes,
+        source_ip=client_ip(request),
+    )
+    return UserOut.model_validate(user)
+
+
+async def _managed_user(db: AsyncSession, principal: Principal, user_id: uuid.UUID, what: str) -> User:
+    """A *different* user of this organization whose role is below the actor's (same rule as role changes)."""
+    user = await db.get(User, user_id)
+    if user is None or user.tenant_id != principal.tenant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if user.id == principal.user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"You cannot {what} your own account here")
+    if not can_manage(principal.role, user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only manage users with a lower role than yours")
+    return user
+
+
+async def _revoke_sessions(db: AsyncSession, user_id: uuid.UUID) -> None:
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+
+
+@router.post("/users/{user_id}/reset-password", response_model=UserOut)
+async def reset_password(
+    user_id: uuid.UUID,
+    body: PasswordResetIn,
+    request: Request,
+    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    """Set a new (temporary) password for someone who forgot theirs. Unlocks the account and signs the user
+    out everywhere, so whoever held the old password loses access immediately."""
+    user = await _managed_user(db, principal, user_id, "reset the password of")
+    if user.auth_provider != "local":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Single sign-on users manage their password in Keycloak")
+    problems = password_problems(body.password)
+    if problems:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Password " + "; ".join(problems))
+    user.password_hash = hash_password(body.password)
+    user.failed_logins = 0
+    user.locked_until = None
+    await _revoke_sessions(db, user.id)
+    await audit(
+        db,
+        action="user.password_reset",
+        resource_type="user",
+        resource_id=user.id,
+        actor=principal.email,
+        actor_id=principal.user_id,
+        tenant_id=principal.tenant_id,
+        details={"email": user.email},
+        source_ip=client_ip(request),
+    )
+    return UserOut.model_validate(user)
+
+
+@router.post("/users/{user_id}/unlock", response_model=UserOut)
+async def unlock_user(
+    user_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    """Lift a lockout caused by repeated failed sign-ins (the password stays the same)."""
+    user = await _managed_user(db, principal, user_id, "unlock")
+    user.failed_logins = 0
+    user.locked_until = None
+    await audit(
+        db,
+        action="user.unlock",
+        resource_type="user",
+        resource_id=user.id,
+        actor=principal.email,
+        actor_id=principal.user_id,
+        tenant_id=principal.tenant_id,
+        details={"email": user.email},
         source_ip=client_ip(request),
     )
     return UserOut.model_validate(user)
@@ -287,6 +366,12 @@ async def revoke_token(
     )
 
 
+def _addr(url: str | None, show: bool) -> str | None:
+    if not url:
+        return None
+    return url if show else "Configured (address visible to administrators)"
+
+
 @router.get("/integrations")
 async def integrations(
     principal: Principal = Depends(require(Perm.RULE_READ)), db: AsyncSession = Depends(get_db)
@@ -320,6 +405,8 @@ async def integrations(
         }
 
     ai = await ai_status(model)
+    # Service addresses reveal internal network layout; only administrators need to see them.
+    show = principal.can(Perm.ADMIN_MANAGE)
     return {
         "telemetry": [
             src(
@@ -337,23 +424,23 @@ async def integrations(
             {
                 "name": "Ollama (local AI)",
                 "status": "available" if ai.get("available") else "unavailable",
-                "detail": ai.get("reason") or f"model {model}",
-                "url": s.ollama_url,
+                "detail": redact_ai_reason(ai.get("reason"), show) or f"model {model}",
+                "url": s.ollama_url if show else None,
             },
             {
                 "name": "MISP threat intelligence",
                 "status": "configured" if s.misp_url else "not configured",
-                "detail": s.misp_url or "Set MISP_URL and MISP_API_KEY to enable",
+                "detail": _addr(s.misp_url, show) or "Set MISP_URL and MISP_API_KEY to enable",
             },
             {
                 "name": "OpenSearch",
                 "status": "configured" if s.opensearch_url else "not configured",
-                "detail": s.opensearch_url or "Optional: high-volume search sink (OPENSEARCH_URL)",
+                "detail": _addr(s.opensearch_url, show) or "Optional: high-volume search sink (OPENSEARCH_URL)",
             },
             {
                 "name": "Keycloak SSO",
                 "status": "configured" if oidc_enabled() else "not configured",
-                "detail": s.keycloak_url or "Optional: set AUTH_MODE=both and KEYCLOAK_URL",
+                "detail": _addr(s.keycloak_url, show) or "Optional: set AUTH_MODE=both and KEYCLOAK_URL",
             },
         ],
         "quarantined_events": quarantined,

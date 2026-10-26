@@ -14,6 +14,8 @@ export interface Me {
   tenant: { id: string; name: string; slug: string; demo: boolean } | null
   home_tenant_id: string
   tenants: { id: string; name: string; slug: string; demo: boolean; demo_loaded_at?: string | null }[]
+  /** Every permission with a plain-language description and whether this user's role includes it. */
+  access: { permission: string; description: string; granted: boolean }[]
 }
 
 export interface IncidentSummary {

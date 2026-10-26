@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, KeyRound, Plus, ShieldCheck, UserPlus } from 'lucide-react'
+import { Copy, KeyRound, Lock, Plus, ShieldCheck, UserPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Modal } from '../components/overlay'
@@ -7,20 +7,60 @@ import { toast, toastError } from '../components/toast'
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Label, Mono, PageHeader, Segmented, Select, SkeletonRows, Switch, Tabs, Textarea } from '../components/ui'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { dateTime, relTime } from '../lib/format'
+import { dateTime, relTime, ROLE_LABEL } from '../lib/format'
 import type { Page } from '../lib/types'
 import { Pager } from './Incidents'
 
 type Tab = 'users' | 'settings' | 'tokens' | 'audit' | 'orgs'
 
-interface UserRow { id: string; email: string; display_name: string; role: string; auth_provider: string; is_active: boolean; last_login_at: string | null; created_at: string }
+interface UserRow { id: string; email: string; display_name: string; role: string; auth_provider: string; is_active: boolean; locked_until: string | null; last_login_at: string | null; created_at: string }
 interface RoleInfo { role: string; description: string; permissions: string[] }
 
-const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super admin', TENANT_ADMIN: 'Admin', SECURITY_ANALYST: 'Security analyst', IT_OPERATOR: 'IT operator', VIEWER: 'Viewer' }
 const ROLE_ORDER = ['VIEWER', 'IT_OPERATOR', 'SECURITY_ANALYST', 'TENANT_ADMIN', 'SUPER_ADMIN']
 /** Mirrors the server rule: a super admin can grant/manage any role, everyone else only roles below their own. */
 const assignable = (mine: string) =>
   ROLE_ORDER.filter((r) => mine === 'SUPER_ADMIN' || ROLE_ORDER.indexOf(r) < ROLE_ORDER.indexOf(mine))
+
+const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+/** 14 random characters from an unambiguous alphabet, always with a letter and a digit. */
+const generatePassword = () => Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => PW_ALPHABET[b % PW_ALPHABET.length]).join('') + '7a'
+
+const isLocked = (u: UserRow, now: number) => !!u.locked_until && new Date(u.locked_until).getTime() > now
+
+function ResetPasswordModal({ user, onClose }: { user: UserRow | null; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [pw, setPw] = useState('')
+  const reset = useMutation({
+    mutationFn: () => api.post(`/admin/users/${user?.id}/reset-password`, { password: pw }),
+    onSuccess: () => {
+      toast(`Password reset for ${user?.email}. They were signed out everywhere.`)
+      qc.invalidateQueries({ queryKey: ['admin-users'] })
+      close()
+    },
+    onError: toastError,
+  })
+  const close = () => { setPw(''); onClose() }
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(pw)
+      toast('Password copied')
+    } catch {
+      toast('Copy failed — select the password and copy it by hand', 'error')
+    }
+  }
+  return (
+    <Modal open={!!user} onClose={close} title={`Reset password for ${user?.display_name ?? ''}`}
+      description="Give the new password to the person through a trusted channel. They can change it from My account after signing in. This also unlocks the account and signs them out of every session."
+      footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button variant="primary" loading={reset.isPending} disabled={pw.length < 12} onClick={() => reset.mutate()}>Reset password</Button></>}>
+      <label className="block"><Label hint={<button type="button" onClick={() => setPw(generatePassword())} className="text-accent">Generate</button>}>New password (min. 12 characters)</Label>
+        <div className="flex gap-2">
+          <Input autoFocus value={pw} onChange={(e) => setPw(e.target.value)} className="font-mono" autoComplete="new-password" />
+          <Button icon={<Copy className="size-4" />} disabled={!pw} onClick={copy} aria-label="Copy password" />
+        </div>
+      </label>
+    </Modal>
+  )
+}
 
 function UsersTab() {
   const { me } = useAuth()
@@ -41,17 +81,25 @@ function UsersTab() {
     onSuccess: () => { toast('User updated'); qc.invalidateQueries({ queryKey: ['admin-users'] }) },
     onError: toastError,
   })
-  const genPw = () => setF({ ...f, password: Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 56]).join('') + '7a' })
+  const genPw = () => setF({ ...f, password: generatePassword() })
+  const [resetFor, setResetFor] = useState<UserRow | null>(null)
+  // captured when the list loads, so rendering stays pure
+  const now = users.dataUpdatedAt
+  const unlock = useMutation({
+    mutationFn: (id: string) => api.post(`/admin/users/${id}/unlock`),
+    onSuccess: () => { toast('Account unlocked'); qc.invalidateQueries({ queryKey: ['admin-users'] }) },
+    onError: toastError,
+  })
   return (
     <Card className="overflow-hidden">
       <CardHeader title="Users" subtitle="People who can sign in to this organization" action={<Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setOpen(true)}>Add user</Button>} />
       {!users.data ? <SkeletonRows /> : (
         <table className="sx-table border-t border-line">
-          <thead><tr><th>User</th><th className="w-48">Role</th><th className="w-36">Last sign-in</th><th className="w-24">Active</th></tr></thead>
+          <thead><tr><th>User</th><th className="w-48">Role</th><th className="w-36">Last sign-in</th><th className="w-24">Active</th><th className="w-52 text-right">Sign-in help</th></tr></thead>
           <tbody>
             {users.data.map((u) => (
               <tr key={u.id}>
-                <td><div className="font-medium">{u.display_name}{u.id === me.user.id && <Badge tone="accent" className="ml-2">you</Badge>}</div><div className="text-[12px] text-faint">{u.email}{u.auth_provider !== 'local' && ' · SSO'}</div></td>
+                <td><div className="font-medium">{u.display_name}{u.id === me.user.id && <Badge tone="accent" className="ml-2">you</Badge>}{isLocked(u, now) && <Badge tone="warn" className="ml-2" title={`Too many failed sign-ins. Locked until ${dateTime(u.locked_until)}`}><Lock className="size-3" /> locked</Badge>}{!u.is_active && <Badge className="ml-2">deactivated</Badge>}</div><div className="text-[12px] text-faint">{u.email}{u.auth_provider !== 'local' && ' · SSO'}</div></td>
                 <td>
                   {canManage(u) && u.auth_provider === 'local' ? (
                     <Select value={u.role} onChange={(e) => update.mutate({ id: u.id, body: { role: e.target.value } })}>
@@ -65,6 +113,10 @@ function UsersTab() {
                 </td>
                 <td className="text-muted">{relTime(u.last_login_at)}</td>
                 <td><Switch label={`Active: ${u.email}`} checked={u.is_active} disabled={!canManage(u)} onChange={(v) => update.mutate({ id: u.id, body: { is_active: v } })} /></td>
+                <td><div className="flex items-center justify-end gap-1">
+                  {canManage(u) && isLocked(u, now) && <Button size="sm" variant="ghost" loading={unlock.isPending && unlock.variables === u.id} onClick={() => unlock.mutate(u.id)}>Unlock</Button>}
+                  {canManage(u) && u.auth_provider === 'local' && <Button size="sm" variant="ghost" icon={<KeyRound className="size-3.5" />} onClick={() => setResetFor(u)}>Reset password</Button>}
+                </div></td>
               </tr>
             ))}
           </tbody>
@@ -81,6 +133,7 @@ function UsersTab() {
           ))}
         </div>
       </div>
+      <ResetPasswordModal user={resetFor} onClose={() => setResetFor(null)} />
       <Modal open={open} onClose={() => setOpen(false)} title="Add user" description="They can change their password after signing in."
         footer={<><Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" loading={create.isPending} disabled={!f.email || !f.display_name || f.password.length < 12} onClick={() => create.mutate()}>Create user</Button></>}>
         <div className="space-y-3">

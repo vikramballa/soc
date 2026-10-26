@@ -15,6 +15,7 @@ from sentinelx.ai.ollama import OllamaClient
 from sentinelx.ai.service import model_for_tenant
 from sentinelx.api.deps import Principal, client_ip, get_db, require
 from sentinelx.api.schemas import IncidentSummary
+from sentinelx.config import get_settings
 from sentinelx.jobs.queue import enqueue
 from sentinelx.ml.service import FEATURE_LABELS
 from sentinelx.persistence.models import (
@@ -38,6 +39,14 @@ async def ai_status(model: str) -> dict[str, Any]:
     st = await OllamaClient().status(model)
     _ai_cache[model] = (time.monotonic(), st)
     return st
+
+
+def redact_ai_reason(reason: str | None, show_addresses: bool) -> str | None:
+    """The Ollama address is internal network detail; people without admin rights get a generic wording."""
+    url = get_settings().ollama_url.rstrip("/")
+    if reason and not show_addresses and url:
+        return reason.replace(url, "its configured address")
+    return reason
 
 
 async def worker_status(db: AsyncSession) -> dict[str, Any]:

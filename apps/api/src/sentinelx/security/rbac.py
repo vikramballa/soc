@@ -67,6 +67,31 @@ ROLE_DESCRIPTIONS = {
 }
 
 
+# Plain-language wording shown to people on their account page, so everyone can see what their role allows.
+PERM_DESCRIPTIONS: dict[Perm, str] = {
+    Perm.INCIDENT_READ: "View incidents, the dashboard and ATT&CK coverage",
+    Perm.INCIDENT_CREATE: "Open incidents by hand and merge duplicates",
+    Perm.INCIDENT_UPDATE: "Change incident status and owner, add notes, complete tasks",
+    Perm.INCIDENT_CLOSE: "Resolve and close incidents and record a verdict",
+    Perm.ALERT_READ: "View alerts",
+    Perm.EVENT_READ: "Search raw security events",
+    Perm.ASSET_READ: "View assets and monitored identities",
+    Perm.ASSET_UPDATE: "Change asset criticality and identity details",
+    Perm.RULE_READ: "View detection rules and integrations",
+    Perm.RULE_MANAGE: "Turn detection rules on or off and retrain the ML model",
+    Perm.THREATINTEL_READ: "View threat-intelligence indicators",
+    Perm.THREATINTEL_MANAGE: "Add, import and remove threat-intelligence indicators",
+    Perm.AI_INVESTIGATE: "Ask the AI analyst to investigate an incident",
+    Perm.RESPONSE_EXECUTE: "Record response actions (tasks, watchlist entries)",
+    Perm.REPORT_GENERATE: "Download incident reports",
+    Perm.INGEST_WRITE: "Send telemetry to SentinelX",
+    Perm.AUDIT_READ: "Read the audit log",
+    Perm.ADMIN_MANAGE: "Manage users, ingest tokens and organization settings",
+    Perm.TENANT_SWITCH: "Switch between organizations",
+    Perm.PLATFORM_MANAGE: "Manage the installation: organizations, custom rules, demo data",
+}
+
+
 def permissions_for(role: str) -> frozenset[Perm]:
     try:
         return ROLE_PERMISSIONS[Role(role)]

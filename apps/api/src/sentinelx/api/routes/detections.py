@@ -366,11 +366,12 @@ async def delete_rule(
 @router.post("/{rule_uid}/test")
 async def test_rule(
     rule_uid: str,
-    principal: Principal = Depends(require(Perm.RULE_READ)),
+    principal: Principal = Depends(require(Perm.RULE_READ, Perm.EVENT_READ)),
     db: AsyncSession = Depends(get_db),
     hours: int = Query(24, ge=1, le=168),
 ) -> dict[str, Any]:
-    """Dry-run a Sigma rule against recent stored events (bounded) - useful when tuning noise."""
+    """Dry-run a Sigma rule against recent stored events (bounded) - useful when tuning noise.
+    Returns matching event samples, so it needs event:read as well as rule:read."""
     compiled = await refresh_custom_rules(db)
     rule = next((r for r in compiled.ruleset.rules if r.uid == rule_uid), None)
     if rule is None:

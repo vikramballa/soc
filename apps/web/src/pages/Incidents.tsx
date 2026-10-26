@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CategoryLabel, RiskScore, SeverityBadge, SourcePills, StatusBadge } from '../components/security'
 import { Button, Card, EmptyState, ErrorState, Input, PageHeader, Select, SkeletonRows, Tabs } from '../components/ui'
 import { api } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { num, relTime, SEVERITY_LABEL } from '../lib/format'
 import type { IncidentSummary, Page, Severity } from '../lib/types'
 
@@ -44,6 +45,8 @@ export default function Incidents() {
   const sort = params.get('sort') ?? 'priority'
   const offset = Number(params.get('offset') ?? 0)
   const groups = params.get('groups') === '1'
+  const assignee = params.get('assignee') ?? ''
+  const { me } = useAuth()
   const [search, setSearch] = useState(params.get('q') ?? '')
   const q = useDebounced(search)
   const [active, setActive] = useState(0)
@@ -61,7 +64,7 @@ export default function Incidents() {
   }, [q])
 
   const query = useQuery({
-    queryKey: ['incidents', status, severity, sort, q, offset, groups],
+    queryKey: ['incidents', status, severity, sort, q, offset, groups, assignee],
     queryFn: () =>
       api.get<Page<IncidentSummary>>('/incidents', {
         status: status === 'all' ? undefined : status,
@@ -71,6 +74,7 @@ export default function Incidents() {
         offset,
         limit: PAGE,
         include_groups: groups,
+        assignee: assignee || undefined,
       }),
     placeholderData: keepPreviousData,
     refetchInterval: 30_000,
@@ -140,6 +144,11 @@ export default function Incidents() {
               )
             })}
           </div>
+          <Select value={assignee} onChange={(e) => set('assignee', e.target.value || null)} className="w-full max-w-44" aria-label="Filter by owner">
+            <option value="">Owner: anyone</option>
+            <option value="me">Assigned to me</option>
+            <option value="unassigned">Unassigned</option>
+          </Select>
           <div className="ml-auto flex items-center gap-2">
             <label className="flex items-center gap-1.5 text-[12px] whitespace-nowrap text-muted" title="Correlation groups that did not meet the incident threshold (noise SentinelX kept aside)">
               <input type="checkbox" checked={groups} onChange={(e) => set('groups', e.target.checked ? '1' : null)} className="accent-[var(--accent)]" />
@@ -159,8 +168,8 @@ export default function Incidents() {
         ) : !query.data ? (
           <SkeletonRows />
         ) : !items.length ? (
-          <EmptyState icon={<ShieldCheck className="size-5 text-ok" />} title={status === 'open' ? 'No open incidents' : 'No incidents match'}>
-            {status === 'open' ? 'Nothing needs investigation right now.' : 'Try a different filter.'}
+          <EmptyState icon={<ShieldCheck className="size-5 text-ok" />} title={assignee === 'me' ? 'Nothing assigned to you' : status === 'open' ? 'No open incidents' : 'No incidents match'}>
+            {assignee === 'me' ? 'Incidents you own will show up here. Open an incident and choose “Assign to me” to take it.' : status === 'open' ? 'Nothing needs investigation right now.' : 'Try a different filter.'}
           </EmptyState>
         ) : (
           <div className="overflow-x-auto">
@@ -190,6 +199,7 @@ export default function Incidents() {
                       <div className="flex items-center gap-2">
                         <span className="shrink-0 font-mono text-[11.5px] text-faint">INC-{inc.number}</span>
                         <span className="truncate font-medium">{inc.title}</span>
+                        {inc.assigned_to === me.user.id && <span className="shrink-0 rounded bg-accent-soft px-1 text-[11px] text-accent-strong" title="You own this incident">yours</span>}
                         {!inc.promoted && <span className="shrink-0 rounded bg-surface-3 px-1 text-[11px] text-faint">low signal</span>}
                       </div>
                       <div className="mt-0.5 flex items-center gap-2 text-[12px] text-faint">

@@ -186,6 +186,23 @@ function Funnel({ f }: { f: Summary['funnel'] }) {
   )
 }
 
+/** "You own N open incidents" - only for roles that can work incidents (viewers never own one). */
+function MyWork() {
+  const { can } = useAuth()
+  const mine = useQuery({
+    queryKey: ['incidents', 'mine-open'],
+    queryFn: () => api.get<{ total: number }>('/incidents', { status: 'open', assignee: 'me', limit: 1 }),
+    enabled: can('incident:update'),
+    refetchInterval: 60_000,
+  })
+  if (!mine.data?.total) return null
+  return (
+    <Link to="/incidents?status=open&assignee=me" className="ml-1 text-accent hover:text-accent-strong">
+      You own {mine.data.total} of them →
+    </Link>
+  )
+}
+
 export default function Dashboard() {
   const { me } = useAuth()
   const [win, setWin] = useState('24')
@@ -214,6 +231,7 @@ export default function Dashboard() {
                   {d.open_by_severity.critical + d.open_by_severity.high > 0 && (
                     <> — {d.open_by_severity.critical + d.open_by_severity.high} high or critical. Start with the top of the list.</>
                   )}
+                  <MyWork />
                 </>
               ) : (
                 'All clear — no open incidents.'

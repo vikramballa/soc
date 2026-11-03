@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ExternalLink } from 'lucide-react'
+import { Download, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Drawer } from '../components/overlay'
 import { SeverityBadge, StatusBadge } from '../components/security'
-import { Badge, Card, ErrorState, PageHeader, SectionTitle, Segmented, Skeleton } from '../components/ui'
-import { api } from '../lib/api'
+import { Badge, Button, Card, ErrorState, PageHeader, SectionTitle, Segmented, Skeleton } from '../components/ui'
+import { api, apiUrl } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { num, relTime } from '../lib/format'
 import type { Severity } from '../lib/types'
 
@@ -36,6 +37,7 @@ export default function Mitre() {
   const [show, setShow] = useState<'relevant' | 'all'>('relevant')
   const [days, setDays] = useState('30')
   const [sel, setSel] = useState<string | null>(null)
+  const { can } = useAuth()
   const q = useQuery({ queryKey: ['mitre', days], queryFn: () => api.get<Matrix>('/mitre/matrix', { days }) })
   const detail = useQuery({ queryKey: ['mitre-tech', sel], enabled: !!sel, queryFn: () => api.get<TechDetail>(`/mitre/techniques/${sel}`) })
 
@@ -48,6 +50,14 @@ export default function Mitre() {
           <>
             <Segmented value={days} onChange={setDays} items={[{ value: '7', label: '7d' }, { value: '30', label: '30d' }, { value: '90', label: '90d' }]} />
             <Segmented value={show} onChange={setShow} items={[{ value: 'relevant', label: 'Observed & covered' }, { value: 'all', label: 'Full matrix' }]} />
+            {can('rule:read') && (
+              <a href={apiUrl('/mitre/navigator/coverage')} title="ATT&CK Navigator layer of the techniques your enabled rules cover">
+                <Button size="sm" icon={<Download className="size-3.5" />}>Coverage layer</Button>
+              </a>
+            )}
+            <a href={apiUrl('/mitre/navigator/observed', { days })} title={`ATT&CK Navigator layer of techniques observed in the last ${days} days`}>
+              <Button size="sm" icon={<Download className="size-3.5" />}>Observed layer</Button>
+            </a>
           </>
         }
       />

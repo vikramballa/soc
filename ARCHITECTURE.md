@@ -49,11 +49,12 @@ API, as background workers, or both in one process, plus a React web UI served b
 | `ingestion/pipeline.py` | Validation, quarantine, idempotent bulk insert, asset/identity upsert |
 | `processing.py` | Runs on stored events: detection → correlation → threat-intel enrichment → risk |
 | `ingestion/{tailer,wazuh_indexer,opensearch_sink}.py` | File tailing, indexer polling, search sink |
-| `detection/sigma/` | Sigma loader, compiler (modifiers, conditions), correlation rules |
+| `detection/sigma/` | Sigma loader, compiler (modifiers, conditions), correlation rules, filters |
 | `detection/{engine,builtin,alerts}.py` | Detection pipeline, stateful evaluators, alert de-duplication |
 | `correlation/{engine,incidents}.py` | Alert→incident correlation; incident builder (risk, evidence, promotion) |
 | `risk/engine.py` | Transparent risk model |
-| `threat_intel/` | Provider abstraction, local + MISP providers, feed import |
+| `threat_intel/` | Provider abstraction, local + MISP providers, feed import (CSV/text/STIX), TAXII 2.1 client |
+| `export/` | OCSF findings (alerts, incidents) and ATT&CK Navigator layers (ADR-013) |
 | `ml/` | Feature extraction (SQL), Isolation Forest, explanations |
 | `ai/` | Context builder, sanitization, prompt policy, Ollama client, grounding validator, evaluation |
 | `jobs/` | PostgreSQL job queue + worker (lanes, scheduler, heartbeat) |

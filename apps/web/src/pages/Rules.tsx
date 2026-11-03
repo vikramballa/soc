@@ -34,10 +34,13 @@ interface Rule {
 const KIND_LABEL: Record<string, string> = {
   sigma: 'Sigma rule',
   correlation: 'Correlation',
+  filter: 'Exclusion filter',
   builtin: 'Behavioral',
   source: 'Sensor pass-through',
   ml: 'Machine learning',
 }
+
+interface LinkedRule { rule_uid: string; title: string }
 
 const template = () => `title: My custom detection
 id: ${crypto.randomUUID()}
@@ -131,7 +134,7 @@ export default function Rules() {
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-line bg-bg-elev px-4 py-2.5">
           <Input icon={<Search className="size-4" />} className="w-full max-w-xs" placeholder="Search rules or technique IDs" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <Segmented value={kind} onChange={setKind} items={[{ value: 'all', label: 'All' }, { value: 'sigma', label: 'Sigma' }, { value: 'correlation', label: 'Correlation' }, { value: 'builtin', label: 'Behavioral' }, { value: 'source', label: 'Sensors' }]} />
+          <Segmented value={kind} onChange={setKind} items={[{ value: 'all', label: 'All' }, { value: 'sigma', label: 'Sigma' }, { value: 'correlation', label: 'Correlation' }, { value: 'filter', label: 'Filters' }, { value: 'builtin', label: 'Behavioral' }, { value: 'source', label: 'Sensors' }]} />
         </div>
         {q.error ? <ErrorState error={q.error} /> : !q.data ? <SkeletonRows /> : !items.length ? <EmptyState icon={<BookOpenCheck className="size-5" />} title="No rules match" /> : (
           <div className="overflow-x-auto">
@@ -143,7 +146,7 @@ export default function Rules() {
                     <td><SeverityBadge severity={r.level === 'informational' ? 'informational' : r.level} size="sm" /></td>
                     <td className="max-w-0">
                       <div className="truncate font-medium">{r.title}</div>
-                      <div className="truncate text-[12px] text-faint">{!r.generates_alerts ? 'Building block — feeds correlation rules, never alerts on its own' : r.description}</div>
+                      <div className="truncate text-[12px] text-faint">{r.kind === 'filter' ? 'Exclusion filter — removes known-benign activity from other rules' : !r.generates_alerts ? 'Building block — feeds correlation rules, never alerts on its own' : r.description}</div>
                     </td>
                     <td className="text-[12.5px] text-muted">{KIND_LABEL[r.kind] ?? r.kind}{(r as Rule & { custom?: boolean }).custom && <Badge tone="accent" className="ml-1.5">custom</Badge>}</td>
                     <td><div className="flex flex-wrap gap-1">{r.mitre_techniques.slice(0, 2).map((t) => <TechniqueChip key={t} id={t} />)}{r.mitre_techniques.length > 2 && <Badge>+{r.mitre_techniques.length - 2}</Badge>}</div></td>
@@ -178,7 +181,7 @@ function RuleDrawer({ uid, onClose }: { uid: string | null; onClose: () => void 
   const q = useQuery({
     queryKey: ['rule', uid],
     enabled: !!uid,
-    queryFn: () => api.get<{ rule: Rule & { content: string; source_path: string | null }; versions: { version: number; created_at: string; created_by: string; sha256: string }[]; recent_alerts: { id: string; title: string; hostname: string | null; last_event_at: string; incident_id: string | null }[] }>(`/detections/${uid}`),
+    queryFn: () => api.get<{ rule: Rule & { content: string; source_path: string | null }; versions: { version: number; created_at: string; created_by: string; sha256: string }[]; recent_alerts: { id: string; title: string; hostname: string | null; last_event_at: string; incident_id: string | null }[]; filters?: LinkedRule[]; filtered_rules?: LinkedRule[] }>(`/detections/${uid}`),
   })
   const test = useMutation({
     mutationFn: () => api.post<typeof dry>(`/detections/${uid}/test`, {}, { hours: 24 }),
@@ -192,7 +195,7 @@ function RuleDrawer({ uid, onClose }: { uid: string | null; onClose: () => void 
       {!r ? <Skeleton className="h-60" /> : (
         <div className="space-y-5">
           <p className="text-[13px] text-muted">{r.description}</p>
-          {isPlatform && !r.source_path && (r.kind === 'sigma' || r.kind === 'correlation') && (
+          {isPlatform && !r.source_path && (r.kind === 'sigma' || r.kind === 'correlation' || r.kind === 'filter') && (
             <div className="flex gap-2">
               <Button size="sm" icon={<Pencil className="size-3.5" />} onClick={() => setEditing(true)}>Edit</Button>
               <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} loading={del.isPending} onClick={() => { if (window.confirm('Delete this custom rule? Existing alerts are kept.')) del.mutate() }}>Delete</Button>
@@ -207,6 +210,19 @@ function RuleDrawer({ uid, onClose }: { uid: string | null; onClose: () => void 
             ['File', r.source_path ? <span key="f" className="font-mono text-[11.5px] break-all text-faint">{r.source_path.split('security/')[1] ?? r.source_path}</span> : <Badge key="f" tone="accent">custom rule (stored in database)</Badge>],
           ]} />
           {r.mitre_techniques.length > 0 && <div className="flex flex-wrap gap-1">{r.mitre_techniques.map((t) => <TechniqueChip key={t} id={t} />)}</div>}
+          {!!q.data!.filters?.length && (
+            <div>
+              <SectionTitle>Exclusion filters applied</SectionTitle>
+              <p className="mb-1.5 text-[12.5px] text-faint">Events matching these filters do not trigger this rule. Switch a filter off to stop excluding them.</p>
+              <ul className="space-y-1 text-[13px]">{q.data!.filters.map((f) => <li key={f.rule_uid}><Link to={`?rule=${f.rule_uid}`} className="hover:text-accent">{f.title}</Link></li>)}</ul>
+            </div>
+          )}
+          {!!q.data!.filtered_rules?.length && (
+            <div>
+              <SectionTitle>Excludes activity from</SectionTitle>
+              <ul className="space-y-1 text-[13px]">{q.data!.filtered_rules.map((f) => <li key={f.rule_uid}><Link to={`?rule=${f.rule_uid}`} className="hover:text-accent">{f.title}</Link></li>)}</ul>
+            </div>
+          )}
           {r.falsepositives.length > 0 && <div><SectionTitle>Known false positives</SectionTitle><ul className="list-disc pl-5 text-[13px] text-muted">{r.falsepositives.map((f) => <li key={f}>{f}</li>)}</ul></div>}
           {r.kind === 'sigma' && (
             <div>

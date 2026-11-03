@@ -171,9 +171,14 @@ export default function IncidentDetail() {
         </div>
         <div className="flex items-center gap-2">
           {can('report:generate') && (
-            <a href={apiUrl(`/incidents/${i.id}/report`, { fmt: 'html' })} target="_blank" rel="noreferrer">
-              <Button icon={<Download className="size-4" />}>Report</Button>
-            </a>
+            <>
+              <a href={apiUrl(`/incidents/${i.id}/report`, { fmt: 'html' })} target="_blank" rel="noreferrer">
+                <Button icon={<Download className="size-4" />}>Report</Button>
+              </a>
+              <a href={apiUrl(`/incidents/${i.id}/ocsf`)} title="Download as an OCSF Incident Finding for your SIEM, data lake or SOAR">
+                <Button variant="ghost" icon={<Download className="size-4" />}>OCSF</Button>
+              </a>
+            </>
           )}
           <Button variant="ai" icon={<Sparkles className="size-4" />} onClick={() => setTab('ai')}>AI analyst</Button>
         </div>

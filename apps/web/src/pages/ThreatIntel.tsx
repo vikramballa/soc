@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Globe2, Plus, Search, ShieldAlert, ShieldCheck, ShieldQuestion, Trash2, Upload } from 'lucide-react'
+import { Globe2, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, ShieldQuestion, Trash2, Upload } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Modal } from '../components/overlay'
@@ -161,6 +161,37 @@ function ImportFeed() {
   )
 }
 
+interface TaxiiStatus { configured: boolean; source: string; last_pull_at: string | null; last_imported: number | null }
+
+/** TAXII 2.1 collection pull. Only shown when an administrator configured a collection on the server. */
+function TaxiiPull() {
+  const { can } = useAuth()
+  const qc = useQueryClient()
+  const status = useQuery({ queryKey: ['taxii'], queryFn: () => api.get<TaxiiStatus>('/threat-intel/taxii') })
+  const pull = useMutation({
+    mutationFn: () => api.post<{ objects: number; imported: number; truncated: boolean }>('/threat-intel/taxii/pull'),
+    onSuccess: (r) => {
+      toast(`Imported ${num(r.imported)} indicators from ${num(r.objects)} TAXII objects${r.truncated ? ' (more available — pull again)' : ''}`)
+      for (const k of ['taxii', 'indicators', 'ti-sources']) qc.invalidateQueries({ queryKey: [k] })
+    },
+    onError: toastError,
+  })
+  if (!status.data?.configured) return null
+  return (
+    <div className="mx-2 mb-3 rounded-lg border border-line p-3 text-[12.5px]">
+      <div className="font-medium">TAXII feed · {status.data.source}</div>
+      <p className="mt-1 text-faint">
+        {status.data.last_pull_at ? <>Last pulled {relTime(status.data.last_pull_at)} · {num(status.data.last_imported ?? 0)} imported</> : 'Not pulled yet'}
+      </p>
+      {can('threatintel:manage') && (
+        <Button size="sm" className="mt-2" icon={<RefreshCw className="size-3.5" />} disabled={pull.isPending} onClick={() => pull.mutate()}>
+          {pull.isPending ? 'Pulling…' : 'Pull new indicators'}
+        </Button>
+      )}
+    </div>
+  )
+}
+
 export default function ThreatIntel() {
   const { can } = useAuth()
   const qc = useQueryClient()
@@ -196,6 +227,7 @@ export default function ThreatIntel() {
               </li>
             ))}
           </ul>
+          <TaxiiPull />
         </Card>
         <Card className="overflow-hidden">
           <div className="px-4 pt-1">

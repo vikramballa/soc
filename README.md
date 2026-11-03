@@ -43,15 +43,15 @@ detection keeps working even if the AI is switched off.
 | | |
 |---|---|
 | **Multi-source ingestion** | Wazuh (indexer polling, `alerts.json` tailing or HTTP push), Suricata EVE JSON, Zeek JSON and TSV. Malformed events are quarantined, never silently dropped, and re-ingesting the same data is idempotent. |
-| **Sigma detection** | 23 bundled Sigma rules and 7 Sigma correlation rules, plus behavioral checks (login from a new source, DGA-looking domains, threat-intel matches). Write your own rules in the UI and dry-run them against stored events before enabling. |
+| **Sigma detection** | 23 bundled Sigma rules and 7 Sigma correlation rules, plus behavioral checks (login from a new source, DGA-looking domains, threat-intel matches). Write your own rules in the UI and dry-run them against stored events before enabling, and exclude known-benign activity with Sigma v2 filters instead of editing shared rules. Every bundled rule has regression test cases. |
 | **Incident correlation** | Alerts that share entities within a time window become one incident. Shared infrastructure such as DNS servers and proxies is detected and suppressed, so unrelated activity is never glued together. |
 | **Explainable risk** | Each score is a sum of capped contributors: detection severity, asset criticality, threat intel, correlation strength, ML anomaly, ATT&CK stage and more. The breakdown is shown on every incident. |
-| **MITRE ATT&CK** | Full v19.2 catalog. Techniques are only marked as observed when a rule or sensor provided evidence. |
-| **Threat intelligence** | Import CSV, plain-text or STIX 2.1 feeds, keep a watchlist, and optionally enrich from MISP. |
+| **MITRE ATT&CK** | Full v19.2 catalog. Techniques are only marked as observed when a rule or sensor provided evidence. Download your rule coverage or observed techniques as ATT&CK Navigator layers. |
+| **Threat intelligence** | Import CSV, plain-text or STIX 2.1 feeds, pull from a TAXII 2.1 collection, keep a watchlist, and optionally enrich from MISP. Revoked and expired STIX indicators are ignored. |
 | **Behavioral ML** | An Isolation Forest baseline per host, with feature-level explanations. It can raise risk but can never create a serious incident on its own. |
 | **Local AI analyst** | Summarizes an incident, proposes a verdict and next steps, and cites the source event for every claim. Answers with invented events, indicators or ATT&CK IDs fail validation. Text in logs that looks like a prompt injection is withheld from the model and flagged. |
 | **Built for teams** | Five roles from Viewer to Super Admin, multi-tenant organizations isolated by PostgreSQL row-level security, an append-only audit log, and optional Keycloak single sign-on. |
-| **Reports** | Export an incident report that keeps observed evidence, automated inference and AI output clearly separate. |
+| **Reports and exports** | Export an incident report that keeps observed evidence, automated inference and AI output clearly separate. Send incidents and alerts to your SIEM, data lake or SOAR as [OCSF](https://ocsf.io) findings. |
 
 <table>
   <tr>
@@ -225,6 +225,7 @@ Prometheus metrics at `/metrics`.
 │   └── web/                  React 19 + TypeScript + Tailwind UI
 ├── security/
 │   ├── sigma-rules/          bundled Sigma detection and correlation rules
+│   ├── detection-tests/      true-positive / near-miss test cases for every bundled rule
 │   └── mitre-data/           compact MITRE ATT&CK v19.2 dataset
 ├── infra/                    Dockerfile, Postgres init, Keycloak realm, Prometheus/Grafana config
 ├── docs/                     architecture, ADRs, operations, deployment and threat model
@@ -245,7 +246,10 @@ Prometheus metrics at `/metrics`.
 - **No remote execution.** Response actions are limited to safe, auditable steps such as tasks and watchlist
   entries. SentinelX never runs commands on your hosts.
 - **AI guardrails.** The model only sees a minimal, sanitized slice of evidence, cannot change scores or take
-  actions, and its output is rejected if it cites anything that doesn't exist.
+  actions, and its output is rejected if it cites anything that doesn't exist. Each control is mapped to the
+  [OWASP Top 10 for LLM Applications](docs/security/owasp-llm-top10.md).
+- **Supply chain.** GitHub Actions are pinned to commit SHAs, Python and npm dependencies are audited on every
+  push, Dependabot keeps them current, and OpenSSF Scorecard tracks the repository's practices.
 
 The full analysis is in the [threat model](docs/security/threat-model.md). To report a vulnerability, see
 [SECURITY.md](SECURITY.md).
@@ -262,7 +266,8 @@ make help        # everything else
 
 Tests run against a separate `sentinelx_test` database, owned by the same `sentinelx` role, on the server
 from your `DATABASE_URL`. Set `TEST_DATABASE_URL` to point them somewhere else. CI runs lint, the full
-test suite, a secret scan, a container vulnerability scan and SBOM generation on every push.
+test suite (including the detection regression corpus), dependency audits, a secret scan, a container
+vulnerability scan and SBOM generation on every push.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
@@ -275,7 +280,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 | [Correlation](docs/architecture/correlation.md) · [Risk model](docs/architecture/risk-model.md) · [AI analyst](docs/architecture/ai-analyst.md) · [ML](docs/architecture/ml.md) | How the core engines work |
 | [Architecture decision records](docs/adr) | Why things are built the way they are |
 | [Deployment](docs/deployment/README.md) · [Operations](docs/operations/README.md) | Running SentinelX in practice |
-| [Threat model](docs/security/threat-model.md) | What we defend against, and how |
+| [Threat model](docs/security/threat-model.md) · [OWASP LLM Top 10 mapping](docs/security/owasp-llm-top10.md) | What we defend against, and how |
 
 ## Acknowledgements
 

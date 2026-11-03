@@ -33,6 +33,8 @@ infra/pcaps/*
 # Generated artifacts
 sbom*.json
 *.log
+# ...except synthetic test fixtures (Zeek writes TSV logs as *.log)
+!apps/api/tests/fixtures/**/*.log
 
 # Editors, OS and tooling
 .vscode/

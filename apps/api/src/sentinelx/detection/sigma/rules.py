@@ -1,4 +1,7 @@
-"""Load and validate Sigma detection + correlation rules from the versioned rules repository."""
+"""Load and validate Sigma detection, correlation and filter rules from the versioned rules repository.
+
+Filters (Sigma v2 meta rules) let an organization exclude known-benign activity from a shared rule without
+editing it, so the bundled rules stay generic and upgradeable while local tuning lives in its own file."""
 
 from __future__ import annotations
 
@@ -74,6 +77,7 @@ class SigmaRule:
     event_types: set[str] | None
     techniques: list[str]
     generate: bool = True
+    filters: list[SigmaFilter] = field(default_factory=list)
 
     @property
     def severity(self) -> int:
@@ -90,8 +94,38 @@ class SigmaRule:
         service = self.logsource.get("service")
         return not (product == "zeek" and service and (ev.get("metadata") or {}).get("zeek_log") != service)
 
-    def matches(self, ev: dict[str, Any]) -> bool:
-        return self.applies_to(ev) and self.predicate(ev)
+    def matches(self, ev: dict[str, Any], enabled: set[str] | None = None) -> bool:
+        """Rule logic AND every attached filter's condition. ``enabled`` limits which filters apply, so a
+        filter switched off (globally or for one organization) stops excluding events immediately."""
+        if not (self.applies_to(ev) and self.predicate(ev)):
+            return False
+        return all(f.predicate(ev) for f in self.filters if enabled is None or f.uid in enabled)
+
+
+@dataclass
+class SigmaFilter:
+    """A Sigma v2 filter: a condition ANDed onto the referenced rules' own condition."""
+
+    uid: str
+    name: str | None
+    title: str
+    description: str
+    status: str
+    level: str
+    logsource: dict[str, str]
+    tags: list[str]
+    falsepositives: list[str]
+    content: str
+    path: str
+    predicate: Predicate
+    rule_refs: list[str]
+    techniques: list[str] = field(default_factory=list)
+    generate: bool = False  # filters never raise alerts themselves
+    resolved_refs: list[str] = field(default_factory=list)
+
+    @property
+    def severity(self) -> int:
+        return 0
 
 
 @dataclass
@@ -125,10 +159,12 @@ class RuleSet:
     rules: list[SigmaRule]
     correlations: list[SigmaCorrelation]
     errors: list[tuple[str, str]]
+    filters: list[SigmaFilter] = field(default_factory=list)
 
-    def by_uid(self) -> dict[str, SigmaRule | SigmaCorrelation]:
-        out: dict[str, SigmaRule | SigmaCorrelation] = {r.uid: r for r in self.rules}
+    def by_uid(self) -> dict[str, SigmaRule | SigmaCorrelation | SigmaFilter]:
+        out: dict[str, SigmaRule | SigmaCorrelation | SigmaFilter] = {r.uid: r for r in self.rules}
         out.update({c.uid: c for c in self.correlations})
+        out.update({f.uid: f for f in self.filters})
         return out
 
 
@@ -209,17 +245,47 @@ def _load_correlation(doc: dict[str, Any], content: str, path: str) -> SigmaCorr
     )
 
 
+def _load_filter(doc: dict[str, Any], content: str, path: str) -> SigmaFilter:
+    c = _common(doc)
+    c["level"] = "informational"
+    logsource = {k: str(v).lower() for k, v in (doc.get("logsource") or {}).items()}
+    if not logsource:
+        raise SigmaCompileError("missing logsource")
+    spec = doc["filter"]
+    if not isinstance(spec, dict):
+        raise SigmaCompileError("filter must be a mapping")
+    refs = spec.get("rules") or []
+    if isinstance(refs, str):
+        refs = [refs]
+    if not refs:
+        raise SigmaCompileError("filter needs at least one referenced rule in filter.rules")
+    detection = {k: v for k, v in spec.items() if k != "rules"}
+    return SigmaFilter(
+        **c,
+        logsource=logsource,
+        content=content,
+        path=path,
+        predicate=compile_detection(detection),
+        rule_refs=[str(r) for r in refs],
+    )
+
+
+def _logsource_conflict(a: dict[str, str], b: dict[str, str]) -> list[str]:
+    return [k for k in ("product", "category", "service") if k in a and k in b and a[k] != b[k]]
+
+
 def load_rules(directory: Path | None, extra: list[tuple[str, str]] | None = None) -> RuleSet:
     """Load rule files from ``directory`` plus ``extra`` (source label, YAML text) documents, e.g. custom
     rules stored in the database."""
     rules: list[SigmaRule] = []
     correlations: list[SigmaCorrelation] = []
+    filters: list[SigmaFilter] = []
     errors: list[tuple[str, str]] = []
     seen: set[str] = set()
     sources: list[tuple[str, str]] = []
     if directory is not None:
-        for path in sorted(directory.rglob("*.yml")) + sorted(directory.rglob("*.yaml")):
-            sources.append((str(path), path.read_text(encoding="utf-8")))
+        for file in sorted(directory.rglob("*.yml")) + sorted(directory.rglob("*.yaml")):
+            sources.append((str(file), file.read_text(encoding="utf-8")))
     sources.extend(extra or [])
     for path, text in sources:
         try:
@@ -231,12 +297,16 @@ def load_rules(directory: Path | None, extra: list[tuple[str, str]] | None = Non
         for i, doc in enumerate(docs):
             content = raw_docs[i].strip() if len(raw_docs) == len(docs) else text
             try:
-                item: SigmaRule | SigmaCorrelation = (
-                    _load_correlation(doc, content, str(path))
-                    if "correlation" in doc
-                    else _load_rule(doc, content, str(path))
-                )
-            except (SigmaCompileError, KeyError, TypeError, ValueError) as e:
+                if not isinstance(doc, dict):
+                    raise SigmaCompileError("rule document must be a mapping")
+                item: SigmaRule | SigmaCorrelation | SigmaFilter
+                if "correlation" in doc:
+                    item = _load_correlation(doc, content, str(path))
+                elif "filter" in doc:
+                    item = _load_filter(doc, content, str(path))
+                else:
+                    item = _load_rule(doc, content, str(path))
+            except (SigmaCompileError, KeyError, TypeError, ValueError, re.error) as e:
                 errors.append((f"{path}#{i}", str(e)))
                 continue
             if item.uid in seen:
@@ -245,12 +315,15 @@ def load_rules(directory: Path | None, extra: list[tuple[str, str]] | None = Non
             seen.add(item.uid)
             if isinstance(item, SigmaCorrelation):
                 correlations.append(item)
+            elif isinstance(item, SigmaFilter):
+                filters.append(item)
             else:
                 rules.append(item)
 
     # resolve references (by name or id) and apply `generate`
     index: dict[str, str] = {}
-    for r in [*rules, *correlations]:
+    named: list[SigmaRule | SigmaCorrelation] = [*rules, *correlations]
+    for r in named:
         index[r.uid] = r.uid
         if r.name:
             index[str(r.name)] = r.uid
@@ -268,7 +341,42 @@ def load_rules(directory: Path | None, extra: list[tuple[str, str]] | None = Non
     for r in rules:
         if r.uid in referenced_without_generate:
             r.generate = False
-    return RuleSet(rules=rules, correlations=_toposort(valid, errors), errors=errors)
+    return RuleSet(
+        rules=rules,
+        correlations=_toposort(valid, errors),
+        errors=errors,
+        filters=_attach_filters(filters, rules, index, errors),
+    )
+
+
+def _attach_filters(
+    filters: list[SigmaFilter], rules: list[SigmaRule], index: dict[str, str], errors: list[tuple[str, str]]
+) -> list[SigmaFilter]:
+    """Resolve each filter's rule references and attach it to those detection rules. A filter that cannot
+    be applied exactly as written is rejected as a whole rather than silently applied to only some rules."""
+    by_uid = {r.uid: r for r in rules}
+    valid: list[SigmaFilter] = []
+    for f in filters:
+        missing = [ref for ref in f.rule_refs if ref not in index]
+        if missing:
+            errors.append((f.path, f"filter {f.uid} references unknown rules {missing}"))
+            continue
+        targets = [by_uid.get(index[ref]) for ref in f.rule_refs]
+        if any(t is None for t in targets):
+            errors.append((f.path, f"filter {f.uid} can only reference detection rules, not correlations"))
+            continue
+        conflicts = [
+            (t.uid, k) for t in targets if t is not None for k in _logsource_conflict(f.logsource, t.logsource)
+        ]
+        if conflicts:
+            errors.append((f.path, f"filter {f.uid} logsource does not match rule(s): {conflicts}"))
+            continue
+        f.resolved_refs = sorted({t.uid for t in targets if t is not None})
+        for t in targets:
+            if t is not None and f not in t.filters:
+                t.filters.append(f)
+        valid.append(f)
+    return valid
 
 
 def _toposort(corrs: list[SigmaCorrelation], errors: list[tuple[str, str]]) -> list[SigmaCorrelation]:

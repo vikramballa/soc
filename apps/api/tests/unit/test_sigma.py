@@ -126,3 +126,67 @@ def test_timespan() -> None:
     assert parse_timespan("10m") == 600 and parse_timespan("1h") == 3600 and parse_timespan("2d") == 172800
     with pytest.raises(SigmaCompileError):
         parse_timespan("10 minutes")
+
+
+# Sigma v2 filters ------------------------------------------------------------------------------------
+
+_BASE_RULE = """title: Whoami Execution
+id: 0b6d6b6e-0000-4000-8000-000000000001
+name: whoami_exec
+logsource: {category: process_creation, product: windows}
+detection:
+  sel: {Image|endswith: '\\\\whoami.exe'}
+  condition: sel
+level: medium
+"""
+
+_FILTER = """title: Ignore inventory service account
+id: 0b6d6b6e-0000-4000-8000-0000000000f1
+logsource: {category: process_creation, product: windows}
+filter:
+  rules: [whoami_exec]
+  selection: {User|startswith: 'svc_inventory'}
+  condition: not selection
+"""
+
+
+def _load(*docs: str) -> Any:
+    return load_rules(None, [(f"t{i}", d) for i, d in enumerate(docs)])
+
+
+def test_filter_excludes_matching_events_and_is_switchable() -> None:
+    rs = _load(_BASE_RULE, _FILTER)
+    assert not rs.errors and len(rs.filters) == 1
+    rule = rs.rules[0]
+    flt = rs.filters[0]
+    assert flt.resolved_refs == [rule.uid] and rule.filters == [flt]
+    hit = ev(process_path=r"C:\Windows\System32\whoami.exe", username="alice")
+    benign = ev(process_path=r"C:\Windows\System32\whoami.exe", username="svc_inventory01")
+    assert rule.matches(hit) and not rule.matches(benign)
+    # switched off for this organization -> the rule sees everything again
+    assert rule.matches(benign, enabled={rule.uid})
+    assert not rule.matches(benign, enabled={rule.uid, flt.uid})
+
+
+def test_filter_rejections() -> None:
+    unknown = _load(_BASE_RULE, _FILTER.replace("[whoami_exec]", "[no_such_rule]"))
+    assert unknown.filters == [] and "unknown rules" in unknown.errors[0][1]
+    assert unknown.rules[0].filters == []
+    mismatch = _load(_BASE_RULE, _FILTER.replace("product: windows", "product: linux"))
+    assert mismatch.filters == [] and "logsource does not match" in mismatch.errors[0][1]
+    no_refs = _load(_BASE_RULE, _FILTER.replace("rules: [whoami_exec]", "rules: []"))
+    assert no_refs.filters == [] and "at least one referenced rule" in no_refs.errors[0][1]
+    corr = """title: c
+id: 0b6d6b6e-0000-4000-8000-0000000000c1
+name: corr1
+correlation: {type: event_count, rules: [whoami_exec], group-by: [Computer], timespan: 5m, condition: {gte: 3}}
+"""
+    on_corr = _load(_BASE_RULE, corr, _FILTER.replace("[whoami_exec]", "[corr1]"))
+    assert on_corr.filters == [] and any("not correlations" in e for _, e in on_corr.errors)
+
+
+def test_bundled_filters_are_valid() -> None:
+    rs = load_rules(get_settings().sigma_rules_dir)
+    assert not rs.errors
+    for f in rs.filters:
+        assert f.resolved_refs, f.uid

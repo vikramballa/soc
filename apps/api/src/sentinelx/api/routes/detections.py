@@ -16,13 +16,15 @@ from sentinelx.api.deps import Principal, client_ip, get_db, require
 from sentinelx.api.schemas import RuleDetail, RuleOut, RulePatch
 from sentinelx.config import get_settings
 from sentinelx.detection.engine import (
+    CUSTOM_KINDS,
     CUSTOM_PREFIX,
+    enabled_rule_uids,
     event_to_dict,
     get_rules,
     refresh_custom_rules,
     sync_rules_to_db,
 )
-from sentinelx.detection.sigma.rules import content_hash, load_rules
+from sentinelx.detection.sigma.rules import SigmaFilter, SigmaRule, content_hash, load_rules
 from sentinelx.persistence.db import system_session
 from sentinelx.persistence.models import Alert, DetectionRule, RuleVersion, SecurityEvent, Tenant
 from sentinelx.security.rbac import Perm
@@ -73,7 +75,7 @@ async def list_rules(
                 "enabled": r.enabled and r.rule_uid not in disabled,
                 "globally_enabled": r.enabled,
                 "alerts_7d": hits.get(r.rule_uid, 0),
-                "custom": r.source_path is None and r.kind in ("sigma", "correlation"),
+                "custom": r.source_path is None and r.kind in CUSTOM_KINDS,
             }
             for r in rules
         ],
@@ -111,12 +113,22 @@ async def get_rule(
         .all()
     )
     disabled = await _tenant_disabled(db, principal)
+    # Filters change what a rule matches, so show the link in both directions.
+    compiled = await refresh_custom_rules(db)
+    item = compiled.ruleset.by_uid().get(rule_uid)
+    linked: list[dict[str, str]] = []
+    if isinstance(item, SigmaRule):
+        linked = [{"rule_uid": f.uid, "title": f.title} for f in item.filters]
+    elif isinstance(item, SigmaFilter):
+        by_uid = compiled.ruleset.by_uid()
+        linked = [{"rule_uid": u, "title": by_uid[u].title} for u in item.resolved_refs if u in by_uid]
     return {
         "rule": {
             **RuleDetail.model_validate(r).model_dump(),
             "enabled": r.enabled and r.rule_uid not in disabled,
             "globally_enabled": r.enabled,
         },
+        "filters" if isinstance(item, SigmaRule) else "filtered_rules": linked,
         "versions": [
             {"version": v.version, "created_at": v.created_at, "created_by": v.created_by, "sha256": v.content_sha256}
             for v in versions
@@ -214,7 +226,7 @@ async def _validate_custom(db: AsyncSession, content: str, editing: str | None =
             await db.execute(
                 select(DetectionRule.rule_uid, DetectionRule.content).where(
                     DetectionRule.source_path.is_(None),
-                    DetectionRule.kind.in_(["sigma", "correlation"]),
+                    DetectionRule.kind.in_(CUSTOM_KINDS),
                     DetectionRule.rule_uid != uid,
                 )
             )
@@ -225,13 +237,13 @@ async def _validate_custom(db: AsyncSession, content: str, editing: str | None =
     errs = [e for p, e in rs.errors if p.startswith(label)]
     if errs:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Rule rejected: " + "; ".join(errs))
-    item = next((r for r in [*rs.rules, *rs.correlations] if r.uid == uid), None)
+    item = rs.by_uid().get(uid)
     if item is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Rule could not be compiled")
     return {
         "uid": uid,
         "item": item,
-        "kind": "correlation" if "correlation" in doc else "sigma",
+        "kind": "correlation" if "correlation" in doc else "filter" if "filter" in doc else "sigma",
         "existing": existing,
     }
 
@@ -348,7 +360,7 @@ async def delete_rule(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     row = (await db.execute(select(DetectionRule).where(DetectionRule.rule_uid == rule_uid))).scalar_one_or_none()
-    if row is None or row.source_path is not None or row.kind not in ("sigma", "correlation"):
+    if row is None or row.source_path is not None or row.kind not in CUSTOM_KINDS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only custom rules can be deleted")
     await db.delete(row)
     await audit(
@@ -380,7 +392,8 @@ async def test_rule(
     if rule.event_types:
         stmt = stmt.where(SecurityEvent.event_type.in_(rule.event_types))
     rows = (await db.execute(stmt.order_by(SecurityEvent.timestamp.desc()).limit(20000))).scalars().all()
-    matches = [r for r in rows if rule.matches(event_to_dict(r))]
+    enabled = await enabled_rule_uids(db, principal.tenant_id)
+    matches = [r for r in rows if rule.matches(event_to_dict(r), enabled)]
     hosts: dict[str, int] = {}
     for m in matches:
         hosts[m.hostname or m.src_ip or "-"] = hosts.get(m.hostname or m.src_ip or "-", 0) + 1

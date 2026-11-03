@@ -44,6 +44,7 @@ class CompiledRules:
 _compiled: CompiledRules | None = None
 _custom_docs: list[tuple[str, str]] = []
 CUSTOM_PREFIX = "custom:"
+CUSTOM_KINDS = ("sigma", "correlation", "filter")  # rule kinds that can be authored in the UI/API
 
 
 def compile_ruleset(rs: RuleSet) -> CompiledRules:
@@ -82,7 +83,7 @@ async def refresh_custom_rules(session: AsyncSession, force: bool = False) -> Co
         customs = (
             await session.execute(
                 select(DetectionRule.rule_uid, DetectionRule.content).where(
-                    DetectionRule.source_path.is_(None), DetectionRule.kind.in_(["sigma", "correlation"])
+                    DetectionRule.source_path.is_(None), DetectionRule.kind.in_(CUSTOM_KINDS)
                 )
             )
         ).all()
@@ -149,7 +150,7 @@ async def run_detection(session: AsyncSession, tenant_id: uuid.UUID, event_ids: 
             if rule.uid not in enabled:
                 continue
             try:
-                hit = rule.matches(ev)
+                hit = rule.matches(ev, enabled)
             except Exception as e:  # a broken rule must never stop the pipeline
                 log.warning("rule_evaluation_error", rule=rule.uid, error=str(e))
                 continue
@@ -431,6 +432,25 @@ async def sync_rules_to_db(session: AsyncSession, actor: str = "system") -> dict
                 "path": c.path,
                 "generate": True,
                 "falsepositives": c.falsepositives,
+            }
+        )
+    for f in (x for x in compiled.ruleset.filters if not x.path.startswith(CUSTOM_PREFIX)):
+        items.append(
+            {
+                "rule_uid": f.uid,
+                "name": f.name,
+                "title": f.title,
+                "description": f.description,
+                "kind": "filter",
+                "status": f.status,
+                "level": f.level,
+                "severity": f.severity,
+                "tags": f.tags,
+                "techniques": [],
+                "content": f.content,
+                "path": f.path,
+                "generate": False,
+                "falsepositives": f.falsepositives,
             }
         )
     from sentinelx.detection.sigma.rules import LEVEL_SEVERITY

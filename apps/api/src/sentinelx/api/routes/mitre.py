@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinelx.api.deps import Principal, get_db, require
+from sentinelx.detection.engine import enabled_rule_uids
+from sentinelx.export.navigator import build_layer
 from sentinelx.mitre.catalog import get_catalog
 from sentinelx.persistence.models import Alert, DetectionRule, Incident
 from sentinelx.security.rbac import Perm
@@ -154,3 +158,69 @@ async def techniques(
             continue
         out.append({"id": t.id, "name": t.name, "tactics": list(t.tactics), "is_subtechnique": t.is_subtechnique})
     return out[:200]
+
+
+def _layer_response(layer: dict[str, Any], filename: str) -> JSONResponse:
+    return JSONResponse(layer, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/navigator/coverage")
+async def navigator_coverage(
+    principal: Principal = Depends(require(Perm.RULE_READ)), db: AsyncSession = Depends(get_db)
+) -> JSONResponse:
+    """ATT&CK Navigator layer: how many detections enabled for this organization cover each technique."""
+    enabled = await enabled_rule_uids(db, principal.tenant_id)
+    rows = (
+        await db.execute(
+            select(DetectionRule.rule_uid, DetectionRule.title, DetectionRule.mitre_techniques).where(
+                DetectionRule.rule_uid.in_(enabled)
+            )
+        )
+    ).all()
+    scores: dict[str, int] = defaultdict(int)
+    details: dict[str, list[str]] = defaultdict(list)
+    for _uid, title, techs in rows:
+        for t in techs or []:
+            scores[t] += 1
+            details[t].append(title)
+    layer = build_layer(
+        get_catalog(),
+        "coverage",
+        scores,
+        details,
+        "Techniques covered by detection rules enabled for this organization. Score = number of rules.",
+    )
+    return _layer_response(layer, "sentinelx-coverage-layer.json")
+
+
+@router.get("/navigator/observed")
+async def navigator_observed(
+    principal: Principal = Depends(require(Perm.INCIDENT_READ)),
+    db: AsyncSession = Depends(get_db),
+    days: int = Query(30, ge=1, le=365),
+) -> JSONResponse:
+    """ATT&CK Navigator layer: techniques seen in promoted incidents during the last ``days`` days."""
+    rows = (
+        await db.execute(
+            select(Incident.number, Incident.title, Incident.mitre_techniques).where(
+                Incident.tenant_id == principal.tenant_id,
+                Incident.promoted.is_(True),
+                Incident.status != "merged",
+                Incident.last_event_at >= func.now() - func.make_interval(0, 0, 0, days),
+            )
+        )
+    ).all()
+    scores: dict[str, int] = defaultdict(int)
+    details: dict[str, list[str]] = defaultdict(list)
+    for number, title, techs in rows:
+        for t in set(techs or []):
+            scores[t] += 1
+            details[t].append(f"INC-{number}: {title}")
+    layer = build_layer(
+        get_catalog(),
+        "observed",
+        scores,
+        details,
+        f"Techniques observed in promoted incidents during the last {days} days. Score = number of incidents.",
+    )
+    return _layer_response(layer, f"sentinelx-observed-{days}d-layer.json")

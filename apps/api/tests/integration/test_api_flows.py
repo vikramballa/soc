@@ -116,6 +116,42 @@ async def test_incident_lifecycle_timeline_and_report(org: dict[str, Any]) -> No
             assert section in html
 
 
+async def test_standard_exports(org: dict[str, Any]) -> None:
+    """OCSF findings and ATT&CK Navigator layers built from real pipeline output, scoped to the tenant."""
+    async with signed_in(org["tenant_id"], "SECURITY_ANALYST") as c:
+        inc = (await c.get("/api/v1/incidents")).json()["items"][0]
+        r = await c.get(f"/api/v1/incidents/{inc['id']}/ocsf")
+        assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+        f = r.json()
+        assert f["class_uid"] == 2005 and f["metadata"]["uid"] == inc["id"]
+        assert len(f["finding_info_list"]) == inc["alert_count"] >= 1
+
+        r = await c.get("/api/v1/alerts/export/ocsf", params={"hours": 720})
+        assert r.headers["content-type"].startswith("application/x-ndjson")
+        lines = [json.loads(x) for x in r.text.splitlines()]
+        assert lines and all(
+            x["class_uid"] == 2004 and x["metadata"]["tenant_uid"] == str(org["tenant_id"]) for x in lines
+        )
+
+        cov = (await c.get("/api/v1/mitre/navigator/coverage")).json()
+        assert cov["domain"] == "enterprise-attack" and any(t.get("score") for t in cov["techniques"])
+        obs = (await c.get("/api/v1/mitre/navigator/observed", params={"days": 365})).json()
+        observed_ids = {t["techniqueID"] for t in obs["techniques"] if t.get("score")}
+        assert set(inc["mitre_techniques"]) & observed_ids or not inc["mitre_techniques"]
+
+        audit = (await c.get("/api/v1/admin/audit-logs")).status_code
+        assert audit == 403  # analysts cannot read the audit log; the admin check below confirms the entry
+    async with signed_in(org["tenant_id"], "TENANT_ADMIN") as c:
+        logs = (await c.get("/api/v1/admin/audit-logs", params={"action": "incident.export"})).json()
+        items = logs["items"] if isinstance(logs, dict) else logs
+        assert any(x["action"] == "incident.export" for x in items)
+
+    other = await make_tenant("Other")
+    async with signed_in(other, "SECURITY_ANALYST") as c:
+        assert (await c.get(f"/api/v1/incidents/{inc['id']}/ocsf")).status_code == 404
+        assert (await c.get("/api/v1/alerts/export/ocsf", params={"hours": 720})).text == ""
+
+
 async def test_ai_investigation_paths(org: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     from sentinelx.ai import ollama
 

@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinelx.api.deps import Principal, client_ip, get_db, require
 from sentinelx.api.schemas import AlertOut, EventOut, Page
+from sentinelx.export.ocsf import detection_finding
+from sentinelx.mitre.catalog import get_catalog
 from sentinelx.persistence.models import Alert, AlertEvent, SecurityEvent
 from sentinelx.security.rbac import Perm
 from sentinelx.services.audit import audit
@@ -147,3 +153,46 @@ async def by_rule(
     return [
         {"rule_uid": r, "title": t, "alerts": n, "events": int(e or 0), "last_seen": last} for r, t, n, e, last in rows
     ]
+
+
+@router.get("/export/ocsf")
+async def export_ocsf(
+    request: Request,
+    principal: Principal = Depends(require(Perm.REPORT_GENERATE)),
+    db: AsyncSession = Depends(get_db),
+    hours: int = Query(24, ge=1, le=720),
+    limit: int = Query(5000, ge=1, le=20000),
+) -> Response:
+    """Alerts seen in the last ``hours`` as OCSF Detection Findings (class 2004), one JSON object per line
+    (NDJSON) - the shape SIEM, data-lake and SOAR pipelines ingest directly."""
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    rows = (
+        (
+            await db.execute(
+                select(Alert)
+                .where(Alert.tenant_id == principal.tenant_id, Alert.last_event_at >= since)
+                .order_by(Alert.last_event_at)
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    await audit(
+        db,
+        action="alert.export",
+        resource_type="alert",
+        resource_id=None,
+        actor=principal.email,
+        actor_id=principal.user_id,
+        tenant_id=principal.tenant_id,
+        details={"format": "ocsf", "hours": hours, "count": len(rows)},
+        source_ip=client_ip(request),
+    )
+    catalog = get_catalog()
+    body = "".join(json.dumps(jsonable_encoder(detection_finding(a, catalog))) + "\n" for a in rows)
+    return Response(
+        body,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="sentinelx-alerts-{hours}h-ocsf.ndjson"'},
+    )

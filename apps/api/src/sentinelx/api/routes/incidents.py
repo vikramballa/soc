@@ -7,7 +7,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +27,10 @@ from sentinelx.api.schemas import (
     ResponseActionOut,
     TiResultOut,
 )
+from sentinelx.config import get_settings
 from sentinelx.correlation.engine import merge_incidents, next_incident_number, tenant_lock_key
 from sentinelx.correlation.incidents import recompute_incident
+from sentinelx.export.ocsf import incident_finding
 from sentinelx.jobs.queue import enqueue
 from sentinelx.mitre.catalog import get_catalog
 from sentinelx.persistence.db import system_session
@@ -972,3 +975,41 @@ async def report(
             render_html(data), headers={"Content-Disposition": f'attachment; filename="INC-{inc.number}-report.html"'}
         )
     return data
+
+
+@router.get("/{incident_id}/ocsf")
+async def export_ocsf(
+    incident_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(require(Perm.REPORT_GENERATE)),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """The incident as an OCSF Incident Finding (class 2005), with its alerts as finding_info entries."""
+    inc = await _get(db, principal, incident_id)
+    alerts = (
+        (
+            await db.execute(
+                select(Alert)
+                .where(Alert.tenant_id == principal.tenant_id, Alert.incident_id == inc.id)
+                .order_by(Alert.first_event_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    await audit(
+        db,
+        action="incident.export",
+        resource_type="incident",
+        resource_id=inc.id,
+        actor=principal.email,
+        actor_id=principal.user_id,
+        tenant_id=inc.tenant_id,
+        details={"format": "ocsf"},
+        source_ip=client_ip(request),
+    )
+    finding = incident_finding(inc, list(alerts), get_catalog(), get_settings().app_base_url)
+    return JSONResponse(
+        jsonable_encoder(finding),
+        headers={"Content-Disposition": f'attachment; filename="INC-{inc.number}-ocsf.json"'},
+    )

@@ -109,6 +109,57 @@ async def enrich(
     return out
 
 
+# STIX 2.1 patterning: only plain equality comparisons on observable types SentinelX can match on.
+_STIX_COMPARISON = re.compile(
+    r"(ipv4-addr:value|ipv6-addr:value|domain-name:value|url:value|file:hashes\.(?:'[\w-]+'|[\w-]+))"
+    r"\s*=\s*'((?:[^'\\]|\\.)*)'"
+)
+_STIX_TYPES = {"ipv4-addr:value": "ip", "ipv6-addr:value": "ip", "domain-name:value": "domain", "url:value": "url"}
+
+
+def _stix_time(v: Any) -> datetime | None:
+    if not isinstance(v, str):
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def stix_indicator_items(objects: list[Any], now: datetime | None = None) -> list[dict[str, Any]]:
+    """Feed items from STIX 2.1 ``indicator`` objects.
+
+    Revoked and expired indicators are skipped (an IOC its producer withdrew must not keep raising risk),
+    non-STIX pattern languages (Snort, YARA, ...) are ignored, every value in a compound ``OR`` pattern is
+    imported, and ``valid_until`` becomes the indicator's expiry."""
+    now = now or datetime.now(UTC)
+    out: list[dict[str, Any]] = []
+    for o in objects:
+        if not isinstance(o, dict) or o.get("type") != "indicator" or o.get("revoked") is True:
+            continue
+        if (o.get("pattern_type") or "stix") != "stix":
+            continue
+        valid_until = _stix_time(o.get("valid_until"))
+        if valid_until is not None and valid_until <= now:
+            continue
+        refs = [r.get("url") for r in o.get("external_references") or [] if isinstance(r, dict) and r.get("url")]
+        conf = o.get("confidence")
+        for path, raw in _STIX_COMPARISON.findall(str(o.get("pattern") or "")):
+            value = re.sub(r"\\(.)", r"\1", raw)
+            item: dict[str, Any] = {
+                "value": value,
+                "type": _STIX_TYPES.get(path),  # hashes: classified (and validated) by length below
+                "description": o.get("name") or o.get("description"),
+                "confidence": (conf if isinstance(conf, int | float) else 60) / 100,
+                "tags": [str(x) for x in (o.get("indicator_types") or o.get("labels") or [])],
+                "reference": refs[0] if refs else None,
+            }
+            if valid_until is not None:
+                item["expires_at"] = valid_until
+            out.append(item)
+    return out
+
+
 def parse_feed(content: str, fmt: str, default_source: str, default_confidence: float = 0.6) -> list[dict[str, Any]]:
     """Parse indicator feeds.
 
@@ -129,28 +180,18 @@ def parse_feed(content: str, fmt: str, default_source: str, default_confidence: 
     elif fmt == "json":
         data = json.loads(content)
         if isinstance(data, dict) and data.get("type") == "bundle":
-            for o in data.get("objects", []):
-                if o.get("type") != "indicator":
-                    continue
-                m = re.search(
-                    r"\[(?:ipv4-addr|ipv6-addr|domain-name|url|file:hashes\.'?[\w-]+'?):?value\s*=\s*'([^']+)'\]",
-                    o.get("pattern", ""),
-                )
-                m = m or re.search(r"=\s*'([^']+)'", o.get("pattern", ""))
-                if m:
-                    items.append(
-                        {
-                            "value": m.group(1),
-                            "description": o.get("name"),
-                            "confidence": (o.get("confidence") or 60) / 100,
-                            "tags": o.get("labels", []),
-                        }
-                    )
+            items = stix_indicator_items(data.get("objects") or [])
         elif isinstance(data, list):
             items = data
     else:
         raise ValueError(f"unsupported feed format {fmt!r}")
+    return normalize_feed_items(items, default_source, default_confidence)
 
+
+def normalize_feed_items(
+    items: list[dict[str, Any]], default_source: str, default_confidence: float = 0.6
+) -> list[dict[str, Any]]:
+    """Validate, classify and normalize raw feed items; anything SentinelX cannot match on is dropped."""
     out: list[dict[str, Any]] = []
     for it in items:
         value = str(it.get("value", "")).strip()
@@ -181,6 +222,7 @@ def parse_feed(content: str, fmt: str, default_source: str, default_confidence: 
                 "tags": [str(t)[:60] for t in tags][:20],
                 "description": (str(it.get("description") or "")[:2000] or None),
                 "reference": (str(it.get("reference") or "")[:1000] or None),
+                "expires_at": it.get("expires_at") if isinstance(it.get("expires_at"), datetime) else None,
             }
         )
     return out
@@ -190,6 +232,7 @@ async def import_indicators(
     session: AsyncSession, tenant_id: uuid.UUID, items: list[dict[str, Any]], expires_days: int | None = None
 ) -> int:
     now = datetime.now(UTC)
+    default_expiry = now + timedelta(days=expires_days) if expires_days else None
     rows = [
         {
             **it,
@@ -197,7 +240,8 @@ async def import_indicators(
             "tenant_id": tenant_id,
             "first_seen": now,
             "last_seen": now,
-            "expires_at": now + timedelta(days=expires_days) if expires_days else None,
+            # the feed's own validity wins when it is sooner than the import-wide default
+            "expires_at": min((d for d in (it.get("expires_at"), default_expiry) if d is not None), default=None),
         }
         for it in items
     ]

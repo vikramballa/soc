@@ -85,6 +85,7 @@ MATRIX: list[tuple[str, str, Any, Perm | None]] = [
     ("GET", "/api/v1/assets", None, Perm.ASSET_READ),
     ("GET", "/api/v1/detections", None, Perm.RULE_READ),
     ("GET", "/api/v1/threat-intel/indicators", None, Perm.THREATINTEL_READ),
+    ("GET", "/api/v1/threat-intel/taxii", None, Perm.THREATINTEL_READ),
     ("PATCH", "/api/v1/incidents/{inc}", {"status": "triaged"}, Perm.INCIDENT_UPDATE),
     ("POST", "/api/v1/incidents/{inc}/notes", {"body": "x"}, Perm.INCIDENT_UPDATE),
     ("POST", "/api/v1/incidents", {"title": "manual"}, Perm.INCIDENT_CREATE),
@@ -123,6 +124,16 @@ async def test_permission_matrix(role: str) -> None:
                 assert r.status_code < 400 or r.status_code == 422, (role, i, method, url, r.status_code, r.text)
             else:
                 assert r.status_code == 403, (role, i, method, url, r.status_code, r.text)
+
+
+@pytest.mark.parametrize("role", ROLES)
+async def test_taxii_pull_requires_threatintel_manage(role: str) -> None:
+    """No TAXII server is configured in tests, so permitted roles get 409 (not configured), others 403."""
+    tid = await make_tenant(f"T{role}")
+    async with signed_in(tid, role) as c:
+        r = await c.post("/api/v1/threat-intel/taxii/pull", json={})
+        expected = 409 if Perm.THREATINTEL_MANAGE in ROLE_PERMISSIONS[Role(role)] else 403
+        assert r.status_code == expected, (role, r.status_code, r.text)
 
 
 async def test_ingest_requires_ingest_permission_for_sessions() -> None:

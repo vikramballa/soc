@@ -11,18 +11,21 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinelx.api.deps import Principal, client_ip, get_db, require
-from sentinelx.api.schemas import FeedImportIn, IndicatorIn, IndicatorOut, Page, TiResultOut
+from sentinelx.api.schemas import FeedImportIn, IndicatorIn, IndicatorOut, Page, TaxiiPullIn, TiResultOut
 from sentinelx.config import get_settings
-from sentinelx.persistence.models import Indicator, SecurityEvent, ThreatIntelResult
+from sentinelx.persistence.models import Indicator, SecurityEvent, Tenant, ThreatIntelResult
 from sentinelx.security.rbac import Perm
 from sentinelx.services.audit import audit
 from sentinelx.threat_intel.service import (
     classify_indicator,
     enrich,
     import_indicators,
+    normalize_feed_items,
     normalize_indicator,
     parse_feed,
+    stix_indicator_items,
 )
+from sentinelx.threat_intel.taxii import TaxiiError, configured_taxii
 
 router = APIRouter(prefix="/threat-intel", tags=["threat-intel"])
 
@@ -241,3 +244,63 @@ async def import_feed(
         source_ip=client_ip(request),
     )
     return {"imported": n, "skipped": max(0, len(body.content.splitlines()) - n) if body.format == "txt" else None}
+
+
+@router.get("/taxii")
+async def taxii_status(
+    principal: Principal = Depends(require(Perm.THREATINTEL_READ)), db: AsyncSession = Depends(get_db)
+) -> dict[str, Any]:
+    """Whether a TAXII 2.1 collection is configured, and this organization's last pull."""
+    s = get_settings()
+    t = await db.get(Tenant, principal.tenant_id)
+    state = ((t.settings or {}) if t else {}).get("taxii") or {}
+    return {
+        "configured": bool(s.taxii_collection_url),
+        "source": s.taxii_source_name,
+        "last_pull_at": state.get("last_pull_at"),
+        "last_imported": state.get("last_imported"),
+    }
+
+
+@router.post("/taxii/pull")
+async def taxii_pull(
+    body: TaxiiPullIn,
+    request: Request,
+    principal: Principal = Depends(require(Perm.THREATINTEL_MANAGE)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Import new STIX indicators from the configured TAXII 2.1 collection into this organization.
+
+    Incremental by default (resumes after the last object already imported); ``full`` re-reads everything."""
+    client = configured_taxii()
+    if client is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No TAXII collection is configured on this installation")
+    t = await db.get(Tenant, principal.tenant_id)
+    assert t is not None
+    state = dict((t.settings or {}).get("taxii") or {})
+    try:
+        pulled = await client.pull_indicators(None if body.full else state.get("added_after"))
+    except TaxiiError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+    source = get_settings().taxii_source_name
+    items = normalize_feed_items(stix_indicator_items(pulled.objects), source, 0.6)
+    n = await import_indicators(db, principal.tenant_id, items, expires_days=body.expires_days)
+    state.update(added_after=pulled.added_after, last_pull_at=datetime.now(UTC).isoformat(), last_imported=n)
+    t.settings = {**(t.settings or {}), "taxii": state}
+    await audit(
+        db,
+        action="threatintel.taxii_pull",
+        resource_type="feed",
+        resource_id=source,
+        actor=principal.email,
+        actor_id=principal.user_id,
+        tenant_id=principal.tenant_id,
+        details={"objects": len(pulled.objects), "imported": n, "pages": pulled.pages, "full": body.full},
+        source_ip=client_ip(request),
+    )
+    return {
+        "objects": len(pulled.objects),
+        "imported": n,
+        "pages": pulled.pages,
+        "truncated": pulled.truncated,
+    }

@@ -245,6 +245,11 @@ class FeedImportIn(BaseModel):
     expires_days: int | None = Field(None, ge=1, le=3650)
 
 
+class TaxiiPullIn(BaseModel):
+    full: bool = False
+    expires_days: int | None = Field(90, ge=1, le=3650)
+
+
 class TiResultOut(ORM):
     indicator_type: str
     value: str

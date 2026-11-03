@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     misp_url: str | None = None
     misp_api_key: SecretStr | None = None
     misp_verify_tls: bool = True
+    # TAXII 2.1 collection to pull STIX indicators from, e.g. https://taxii.example/api1/collections/<id>
+    taxii_collection_url: str | None = None
+    taxii_username: str | None = None
+    taxii_password: SecretStr | None = None
+    taxii_api_token: SecretStr | None = None
+    taxii_verify_tls: bool = True
+    taxii_source_name: str = "taxii"
     ti_cache_hours: int = 24
 
     # AI (local only)

@@ -1,0 +1,19 @@
+# Keep dependencies and pinned GitHub Action SHAs current. Grouped weekly so updates arrive as a few
+# reviewable PRs rather than a stream; security updates are still raised immediately.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      actions: {patterns: ["*"]}
+  - package-ecosystem: uv
+    directory: /apps/api
+    schedule: {interval: weekly}
+    groups:
+      python: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule: {interval: weekly}
+    groups:
+      web: {patterns: ["*"], update-types: [minor, patch]}

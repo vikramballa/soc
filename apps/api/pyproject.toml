@@ -1,6 +1,6 @@
 [project]
 name = "sentinelx"
-version = "0.1.0"
+version = "0.2.0"
 description = "SentinelX — open-source SOC platform: correlated, explainable, evidence-grounded incidents"
 license = "Apache-2.0"
 requires-python = ">=3.11"

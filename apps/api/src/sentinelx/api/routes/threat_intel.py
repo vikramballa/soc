@@ -37,7 +37,9 @@ async def lookup(
 ) -> dict[str, Any]:
     itype = classify_indicator(indicator)
     if itype is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Enter an IP address, domain, file hash or URL")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Enter an IP address, domain, file hash, URL or JA4 fingerprint"
+        )
     value = normalize_indicator(itype, indicator)
     await enrich(db, principal.tenant_id, [(itype, value)], local_only=False, force=refresh)
     results = (
@@ -57,6 +59,8 @@ async def lookup(
         "domain": SecurityEvent.domain == value,
         "hash": SecurityEvent.file_hash == value,
         "url": SecurityEvent.url == value,
+        "ja3": SecurityEvent.event_metadata["ja3"].astext == value,
+        "ja4": SecurityEvent.event_metadata["ja4"].astext == value,
     }[itype]
     seen = (
         await db.execute(

@@ -6,12 +6,37 @@ Revises: 0001
 
 from alembic import op
 
-from sentinelx.persistence.models import TENANT_TABLES
-
 revision = "0002"
 down_revision = "0001"
 branch_labels = None
 depends_on = None
+
+# Frozen at the tables that existed in revision 0001; later migrations add their own policies.
+TENANT_TABLES = [
+    "users",
+    "sessions",
+    "ingest_tokens",
+    "assets",
+    "identities",
+    "security_events",
+    "quarantined_events",
+    "ingestion_sources",
+    "ingestion_checkpoints",
+    "rule_matches",
+    "incidents",
+    "alerts",
+    "alert_events",
+    "incident_entities",
+    "incident_evidence",
+    "incident_activity",
+    "analyst_notes",
+    "response_actions",
+    "indicators",
+    "threat_intel_results",
+    "ml_models",
+    "ml_predictions",
+    "ai_investigations",
+]
 
 _TENANT_EXPR = "NULLIF(current_setting('app.tenant_id', true), '')::uuid"
 _BYPASS_EXPR = "coalesce(current_setting('app.rls_bypass', true), 'off') = 'on'"

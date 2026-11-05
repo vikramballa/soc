@@ -50,7 +50,9 @@ API, as background workers, or both in one process, plus a React web UI served b
 | `processing.py` | Runs on stored events: detection → correlation → threat-intel enrichment → risk |
 | `ingestion/{tailer,wazuh_indexer,opensearch_sink}.py` | File tailing, indexer polling, search sink |
 | `detection/sigma/` | Sigma loader, compiler (modifiers, conditions), correlation rules |
-| `detection/{engine,builtin,alerts}.py` | Detection pipeline, stateful evaluators, alert de-duplication |
+| `detection/{engine,builtin,alerts}.py` | Detection pipeline, stateful evaluators (incl. honeytokens, first-seen, lateral), alert de-duplication |
+| `detection/{replay,sigma/importer}.py` | Adversary replay of `security/attack-replay` scenarios; SigmaHQ rule import |
+| `hunting/` | Periodic hunts: beacon scoring, DNS tunnelling, telemetry silence, alert storms |
 | `correlation/{engine,incidents}.py` | Alert→incident correlation; incident builder (risk, evidence, promotion) |
 | `risk/engine.py` | Transparent risk model |
 | `threat_intel/` | Provider abstraction, local + MISP providers, feed import |
@@ -58,9 +60,9 @@ API, as background workers, or both in one process, plus a React web UI served b
 | `ai/` | Context builder, sanitization, prompt policy, Ollama client, grounding validator, evaluation |
 | `jobs/` | PostgreSQL job queue + worker (lanes, scheduler, heartbeat) |
 | `api/` | FastAPI routers, auth/RBAC dependencies, schemas |
-| `security/` | Passwords, RBAC, OIDC, rate limiting |
-| `persistence/` | ORM models, tenant-scoped sessions (RLS) |
-| `services/` | Audit trail, first-run bootstrap, retention, dashboard figures |
+| `security/` | Passwords, RBAC, OIDC, rate limiting, TOTP, secret sealing |
+| `persistence/` | ORM models, tenant-scoped sessions (RLS), runtime-role grants (ADR-013) |
+| `services/` | Audit trail + hash-chain verification, self-monitoring (`selfmon`), bootstrap, retention, dashboard |
 | `apps/api/tests/` | unit · integration · security · e2e tests; `fixtures/` holds synthetic Wazuh/Suricata/Zeek samples |
 | `apps/web/src` | React UI (pages, components) |
 

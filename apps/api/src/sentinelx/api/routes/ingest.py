@@ -6,6 +6,7 @@ Auth: ``Authorization: Bearer sxi_...`` ingest token (scoped to one tenant), or 
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
-from sentinelx.api.deps import get_principal
+from sentinelx.api.deps import client_ip, get_principal
 from sentinelx.config import get_settings
 from sentinelx.ingestion.parsers import zeek
 from sentinelx.ingestion.pipeline import SOURCES, ingest
@@ -22,26 +23,93 @@ from sentinelx.persistence.models import IngestToken
 from sentinelx.security.passwords import token_hash
 from sentinelx.security.ratelimit import limiter
 from sentinelx.security.rbac import Perm
+from sentinelx.services import selfmon
+from sentinelx.services.audit import audit
+
+MAX_KNOWN_IPS = 20
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
-async def _tenant_from_request(request: Request) -> tuple[Any, str]:
+def _ip_allowed(ip: str | None, cidrs: list[str]) -> bool:
+    if not cidrs:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip or "")
+    except ValueError:
+        return False
+    return any(addr in ipaddress.ip_network(c, strict=False) for c in cidrs)
+
+
+async def _tenant_from_request(request: Request, source: str) -> tuple[Any, str]:
     auth = request.headers.get("authorization", "")
+    raw: str | None = None
     if auth.lower().startswith("bearer sxi_"):
         raw = auth[7:].strip()
+    elif source == "canarytokens" and request.query_params.get("token", "").startswith("sxi_"):
+        # Canarytokens webhooks cannot send headers; the token rides in the URL (scope it to this source)
+        raw = request.query_params["token"]
+    if raw is not None:
+        ip = client_ip(request)
+        violation: str | None = None
         async with system_session() as s:
             tok = (
                 await s.execute(
-                    select(IngestToken).where(
-                        IngestToken.token_hash == token_hash(raw), IngestToken.revoked_at.is_(None)
-                    )
+                    select(IngestToken)
+                    .where(IngestToken.token_hash == token_hash(raw), IngestToken.revoked_at.is_(None))
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
             if tok is None:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or revoked ingest token")
-            tok.last_used_at = datetime.now(UTC)
-            return tok.tenant_id, f"token:{tok.prefix}"
+            if tok.allowed_sources and source not in tok.allowed_sources:
+                violation = f"source {source!r} is outside this token's scope"
+            elif not _ip_allowed(ip, tok.allowed_cidrs or []):
+                violation = f"address {ip} is outside this token's allowed networks"
+            if violation:
+                await audit(
+                    s,
+                    action="ingest_token.denied",
+                    resource_type="ingest_token",
+                    resource_id=tok.id,
+                    actor=f"token:{tok.prefix}",
+                    tenant_id=tok.tenant_id,
+                    result="denied",
+                    details={"reason": violation, "source": source},
+                    source_ip=ip,
+                )
+                await selfmon.emit(
+                    s,
+                    tok.tenant_id,
+                    "ingest_token.denied",
+                    f"Ingest token {tok.name} was used outside its scope: {violation}",
+                    actor=f"token:{tok.prefix}",
+                    src_ip=ip,
+                    outcome="failure",
+                    severity=60,
+                    details={"token_name": tok.name, "reason": violation},
+                )
+            else:
+                known = list(tok.known_ips or [])
+                if ip and ip not in known:
+                    if known:
+                        await selfmon.emit(
+                            s,
+                            tok.tenant_id,
+                            "ingest_token.new_address",
+                            f"Ingest token {tok.name} used from a new address {ip}",
+                            actor=f"token:{tok.prefix}",
+                            src_ip=ip,
+                            severity=40,
+                            details={"token_name": tok.name, "known_ips": known[-5:]},
+                        )
+                    tok.known_ips = [*known, ip][-MAX_KNOWN_IPS:]
+                tok.last_used_at = datetime.now(UTC)
+                tok.last_used_ip = ip
+                tenant_id, actor = tok.tenant_id, f"token:{tok.prefix}"
+        if violation:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This ingest token is not allowed here")
+        return tenant_id, actor
     principal = await get_principal(request)
     if not principal.can(Perm.INGEST_WRITE):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing permission: ingest:write")
@@ -92,7 +160,7 @@ async def ingest_events(
     length = int(request.headers.get("content-length") or 0)
     if length > s.ingest_max_body_bytes:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Batch too large; split it into smaller requests")
-    tenant_id, _actor = await _tenant_from_request(request)
+    tenant_id, _actor = await _tenant_from_request(request, source)
     if not limiter.allow(f"ingest:{tenant_id}", 600):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "Ingest rate limit exceeded", headers={"Retry-After": "5"}

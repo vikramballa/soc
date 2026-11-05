@@ -1,0 +1,30 @@
+{
+  "id": "dns-tunnel",
+  "name": "Data smuggled out inside DNS queries",
+  "techniques": [
+    "T1071.004",
+    "T1048"
+  ],
+  "source": "zeek",
+  "log_type": "dns",
+  "hunt": true,
+  "repeat": {
+    "count": 80,
+    "every_seconds": 5,
+    "start_offset": -600,
+    "template": {
+      "uid": "Cdns{i}",
+      "id.orig_h": "10.20.30.17",
+      "id.orig_p": 53000,
+      "id.resp_h": "10.20.30.2",
+      "id.resp_p": 53,
+      "proto": "udp",
+      "query": "{hex}{hex}.{i}a7.exfil-tunnel.example",
+      "qtype_name": "TXT",
+      "rcode_name": "NOERROR"
+    }
+  },
+  "expect": [
+    "Possible DNS Tunnelling"
+  ]
+}

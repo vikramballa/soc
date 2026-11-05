@@ -46,7 +46,15 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn
 }
 
-async function request<T>(method: string, path: string, body?: unknown, params?: Query): Promise<T> {
+/** Sensitive changes (roles, rules, tokens, decoys) need a recent password check. The server answers
+ * 403 with ``X-SentinelX-Reauth: required``; the handler asks the user to confirm and resolves to
+ * ``true`` when they did, so the original request is retried once. */
+let onReauth: (() => Promise<boolean>) | null = null
+export function setReauthHandler(fn: (() => Promise<boolean>) | null) {
+  onReauth = fn
+}
+
+async function request<T>(method: string, path: string, body?: unknown, params?: Query, retried = false): Promise<T> {
   const headers: Record<string, string> = { 'X-Requested-With': 'SentinelX', Accept: 'application/json' }
   const tenant = getTenantOverride()
   if (tenant) headers['X-SentinelX-Tenant'] = tenant
@@ -71,7 +79,10 @@ async function request<T>(method: string, path: string, body?: unknown, params?:
     data = text
   }
   if (!res.ok) {
-    if (res.status === 401 && !path.startsWith('/auth/login')) onUnauthorized?.()
+    if (res.status === 403 && res.headers.get('X-SentinelX-Reauth') === 'required' && onReauth && !retried) {
+      if (await onReauth()) return request<T>(method, path, body, params, true)
+    }
+    if (res.status === 401 && !path.startsWith('/auth/login') && !path.startsWith('/auth/mfa/verify')) onUnauthorized?.()
     const detail = String((data as { detail?: string })?.detail ?? '')
     if (tenant && ((res.status === 403 && detail.includes('organization')) || (res.status === 404 && detail === 'Organization not found'))) {
       // the selected organization no longer exists or is not accessible: fall back to the home organization
@@ -79,7 +90,7 @@ async function request<T>(method: string, path: string, body?: unknown, params?:
       window.location.assign('/')
     }
     const d = data as { detail?: unknown; errors?: { field: string; message: string }[] } | undefined
-    let msg = typeof d?.detail === 'string' ? d.detail : `Request failed (${res.status})`
+    let msg = typeof d?.detail === 'string' ? d.detail.replace(/^(reauth|mfa_enrollment)_required: /, '') : `Request failed (${res.status})`
     if (d?.errors?.length) msg = d.errors.map((e) => `${e.field || 'input'}: ${e.message}`).join('; ')
     throw new ApiError(res.status, msg, data)
   }

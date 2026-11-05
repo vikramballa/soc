@@ -1,0 +1,269 @@
+title: Scheduled Task Created From the Command Line
+id: 236bec1b-2455-4d6c-b14e-face59dcc043
+status: stable
+description: schtasks.exe created a task. Attackers schedule their payload to survive reboots or to run as SYSTEM.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\schtasks.exe'
+    CommandLine|contains: '/create'
+  filter_setup:
+    ParentImage|endswith:
+      - '\msiexec.exe'
+      - '\setup.exe'
+  condition: selection and not filter_setup
+falsepositives:
+  - Software installers and administrators
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1053.005
+---
+title: Scheduled Task Running a Script Host or Temp Binary
+id: d19cb0c6-3181-407d-8a56-3150568aed85
+status: stable
+description: A new scheduled task (Windows event 4698) runs a script host, PowerShell or a program in a user-writable folder - classic persistence.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4698
+    TaskContent|contains:
+      - 'powershell'
+      - 'mshta'
+      - 'wscript'
+      - 'cscript'
+      - 'rundll32'
+      - '\AppData\'
+      - '\Temp\'
+      - '\Users\Public\'
+  condition: selection
+falsepositives:
+  - Some updaters
+level: high
+tags:
+  - attack.persistence
+  - attack.t1053.005
+---
+title: Autostart Registry Run Key Modified
+id: 83b7fbc0-07ea-436c-be3a-bf455e78c5d0
+status: stable
+description: A value was written under a Run / RunOnce key, so a program starts at every logon.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: registry_set
+  product: windows
+detection:
+  selection:
+    TargetObject|contains:
+      - '\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\'
+      - '\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\'
+      - '\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run\'
+      - '\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit'
+      - '\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell'
+  filter_installers:
+    Image|endswith:
+      - '\msiexec.exe'
+      - '\OneDriveSetup.exe'
+  condition: selection and not filter_installers
+falsepositives:
+  - Legitimate software adding itself to autostart
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1547.001
+---
+title: Service Installed From a User-Writable Folder
+id: 57044944-1145-4ef0-89fa-37f3c071f410
+status: stable
+description: A new Windows service points at a binary in a temp, public or user profile folder. Legitimate services live under Program Files or System32.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: windows
+  service: system
+detection:
+  selection:
+    EventID: 7045
+    ImagePath|contains:
+      - '\AppData\'
+      - '\Temp\'
+      - '\Users\Public\'
+      - '\ProgramData\'
+      - 'powershell'
+      - 'cmd /c'
+      - 'cmd.exe /c'
+  condition: selection
+falsepositives:
+  - Badly packaged software
+level: high
+tags:
+  - attack.persistence
+  - attack.t1543.003
+---
+title: WMI Event Subscription Persistence
+id: fa74a55d-f8b7-413d-bd66-53e9bb3e3672
+status: stable
+description: A command created a permanent WMI event consumer or filter - fileless persistence that runs code when a system event occurs.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    CommandLine|contains:
+      - 'CommandLineEventConsumer'
+      - 'ActiveScriptEventConsumer'
+      - '__EventFilter'
+      - 'Set-WmiInstance'
+  condition: selection
+falsepositives:
+  - Some management agents
+level: high
+tags:
+  - attack.persistence
+  - attack.t1546.003
+---
+title: Linux Cron Job Modified
+id: 980547e9-c819-4fee-9f5b-1ccc95c36ba5
+status: stable
+description: A crontab file was created or changed. Attackers add cron jobs to re-launch implants.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: file_change
+  product: linux
+detection:
+  selection:
+    TargetFilename|startswith:
+      - '/etc/cron'
+      - '/var/spool/cron'
+      - '/etc/anacrontab'
+  condition: selection
+falsepositives:
+  - Package updates and configuration management
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1053.003
+---
+title: Systemd Service Unit Created or Changed
+id: ce9141a9-edf8-43fb-9903-18fbf1b38c88
+status: stable
+description: A systemd unit file was written. A malicious unit restarts the attacker's program at boot.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: file_change
+  product: linux
+detection:
+  selection:
+    TargetFilename|startswith:
+      - '/etc/systemd/system/'
+      - '/usr/lib/systemd/system/'
+      - '/lib/systemd/system/'
+    TargetFilename|endswith:
+      - '.service'
+      - '.timer'
+  condition: selection
+falsepositives:
+  - Package installs
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1543.002
+---
+title: SSH Authorized Keys Changed
+id: 4cd17125-ba68-42de-ad90-0d9a164acd99
+status: stable
+description: An authorized_keys file was modified. Adding a key gives password-less access that survives password resets.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: file_change
+  product: linux
+detection:
+  selection:
+    TargetFilename|endswith:
+      - '/.ssh/authorized_keys'
+      - '/.ssh/authorized_keys2'
+  condition: selection
+falsepositives:
+  - Administrators adding keys, provisioning tools
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1098.004
+---
+title: macOS Launch Agent or Daemon Created
+id: 904b6c35-94ce-4ecc-b322-5166ff86e25a
+status: stable
+description: A property list was written to a LaunchAgents or LaunchDaemons folder, which macOS loads at login or boot.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: file_change
+  product: macos
+detection:
+  selection:
+    TargetFilename|contains:
+      - '/LaunchAgents/'
+      - '/LaunchDaemons/'
+    TargetFilename|endswith: '.plist'
+  condition: selection
+falsepositives:
+  - Application installs
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1543.001
+---
+title: Web Server Spawned a Shell (Possible Web Shell)
+id: eb534a27-f03d-4be2-9a85-22594798e8f3
+status: stable
+description: A web server or application server process started a command shell. Web shells planted through a vulnerable application look exactly like this.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection_parent:
+    ParentImage|endswith:
+      - '\w3wp.exe'
+      - '\httpd.exe'
+      - '\nginx.exe'
+      - '\tomcat.exe'
+      - '\php-cgi.exe'
+      - '/httpd'
+      - '/apache2'
+      - '/nginx'
+      - '/php-fpm'
+  selection_child:
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\whoami.exe'
+      - '/sh'
+      - '/bash'
+      - '/dash'
+      - '/whoami'
+      - '/id'
+      - '/uname'
+  condition: all of selection_*
+falsepositives:
+  - Applications that legitimately shell out (rare; review)
+level: high
+tags:
+  - attack.persistence
+  - attack.t1505.003
+  - attack.initial_access
+  - attack.t1190

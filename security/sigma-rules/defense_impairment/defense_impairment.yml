@@ -1,0 +1,219 @@
+title: Security Agent or Sensor Service Stopped
+id: b9abddc0-ce6a-4921-a7ad-fd67fa28d6c8
+status: stable
+description: A command stopped, disabled or killed a security agent or sensor (Wazuh, Sysmon, Suricata, Zeek, auditd, Defender, EDR). Attackers blind monitoring before they act.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection_verb:
+    CommandLine|contains:
+      - 'stop '
+      - 'disable '
+      - ' kill'
+      - 'taskkill'
+      - 'Stop-Service'
+      - 'Set-Service'
+      - 'delete '
+      - 'mask '
+  selection_target:
+    CommandLine|contains:
+      - 'wazuh'
+      - 'ossec'
+      - 'sysmon'
+      - 'suricata'
+      - 'zeek'
+      - 'auditd'
+      - 'WinDefend'
+      - 'MsMpEng'
+      - 'falcon'
+      - 'osquery'
+      - 'filebeat'
+      - 'fluent-bit'
+  selection_tool:
+    Image|endswith:
+      - '\sc.exe'
+      - '\net.exe'
+      - '\net1.exe'
+      - '\taskkill.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '/systemctl'
+      - '/service'
+      - '/kill'
+      - '/pkill'
+      - '/killall'
+  condition: all of selection_*
+falsepositives:
+  - Planned agent upgrades (pair with a maintenance window)
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+  - attack.impact
+  - attack.t1489
+---
+title: Microsoft Defender Protection Turned Off
+id: 710bdc7d-180e-4c34-a19e-3060536a4dc3
+status: stable
+description: PowerShell was used to switch off Defender real-time protection or add a broad exclusion.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    CommandLine|contains:
+      - 'DisableRealtimeMonitoring $true'
+      - 'DisableRealtimeMonitoring 1'
+      - 'DisableBehaviorMonitoring $true'
+      - 'DisableIOAVProtection $true'
+      - 'Add-MpPreference -ExclusionPath'
+      - 'Add-MpPreference -ExclusionProcess'
+      - 'DisableAntiSpyware'
+  condition: selection
+falsepositives:
+  - Administrators troubleshooting performance (should be rare and ticketed)
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: Windows Event Logging or Audit Policy Disabled
+id: 7bbac2a1-6a8a-4441-844d-0a80acd945a0
+status: stable
+description: Event logs were cleared from the command line, the audit policy was wiped, or event log settings were weakened.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_wevtutil:
+    Image|endswith: '\wevtutil.exe'
+    CommandLine|contains:
+      - ' cl '
+      - ' clear-log '
+      - 'sl /e:false'
+  selection_auditpol:
+    Image|endswith: '\auditpol.exe'
+    CommandLine|contains:
+      - '/clear'
+      - '/remove'
+      - 'disable'
+  selection_ps:
+    CommandLine|contains:
+      - 'Clear-EventLog'
+      - 'Remove-EventLog'
+      - 'Limit-EventLog'
+  condition: 1 of selection_*
+falsepositives:
+  - Image preparation scripts
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685.001
+---
+title: Sysmon Driver Unloaded or Uninstalled
+id: c8d5cfc9-4310-4aa0-b8cd-8ff2ea0cddfb
+status: stable
+description: The Sysmon minifilter driver was unloaded or Sysmon was uninstalled, silencing detailed endpoint telemetry.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_fltmc:
+    Image|endswith: '\fltMC.exe'
+    CommandLine|contains: 'unload'
+  selection_uninstall:
+    CommandLine|contains:
+      - 'sysmon.exe -u'
+      - 'sysmon64.exe -u'
+  condition: 1 of selection_*
+falsepositives:
+  - Sysmon upgrades
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: Linux Audit Logging Disabled
+id: 39fdc024-af8f-4d99-b60d-d958233759a0
+status: stable
+description: The Linux audit system was switched off or its rules deleted (auditctl -e 0 / -D).
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    Image|endswith: '/auditctl'
+    CommandLine|contains:
+      - ' -e 0'
+      - ' -D'
+  condition: selection
+falsepositives:
+  - Audit rule reloads during configuration changes
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685.004
+---
+title: Shell History Cleared or Disabled
+id: ed95cf37-b50f-462f-bf6c-7067242b8df9
+status: stable
+description: A command cleared shell history or turned history recording off - covering tracks after interactive activity.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains:
+      - 'history -c'
+      - 'rm ~/.bash_history'
+      - 'rm -f ~/.bash_history'
+      - '> ~/.bash_history'
+      - 'unset HISTFILE'
+      - 'HISTSIZE=0'
+      - 'Clear-History'
+      - 'ConsoleHost_history.txt'
+  condition: selection
+falsepositives:
+  - Privacy-conscious administrators
+level: medium
+tags:
+  - attack.stealth
+  - attack.t1070.003
+  - attack.defense_impairment
+  - attack.t1690
+---
+title: Host Firewall Turned Off
+id: b931256b-ee9d-47ce-856b-3a5f88b71bb9
+status: stable
+description: The host firewall was disabled (netsh advfirewall, Set-NetFirewallProfile, ufw, firewalld, iptables flush).
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains:
+      - 'advfirewall set allprofiles state off'
+      - 'advfirewall set currentprofile state off'
+      - 'Set-NetFirewallProfile -Enabled False'
+      - 'ufw disable'
+      - 'systemctl stop firewalld'
+      - 'iptables -F'
+  condition: selection
+falsepositives:
+  - Troubleshooting (should be ticketed)
+level: medium
+tags:
+  - attack.defense_impairment
+  - attack.t1686

@@ -1,0 +1,220 @@
+{
+  "id": "kerberoasting",
+  "name": "Kerberoasting: RC4 service tickets for many service accounts",
+  "techniques": [
+    "T1558.003"
+  ],
+  "source": "wazuh",
+  "events": [
+    {
+      "@offset": -300,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "DC01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4769",
+            "channel": "Security",
+            "computer": "DC01"
+          },
+          "eventdata": {
+            "targetUserName": "jdoe@CORP.EXAMPLE",
+            "serviceName": "svc_sql00",
+            "ticketEncryptionType": "0x17",
+            "status": "0x0",
+            "ipAddress": "::ffff:10.20.30.17"
+          }
+        }
+      },
+      "location": "EventChannel"
+    },
+    {
+      "@offset": -290,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "DC01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4769",
+            "channel": "Security",
+            "computer": "DC01"
+          },
+          "eventdata": {
+            "targetUserName": "jdoe@CORP.EXAMPLE",
+            "serviceName": "svc_sql01",
+            "ticketEncryptionType": "0x17",
+            "status": "0x0",
+            "ipAddress": "::ffff:10.20.30.17"
+          }
+        }
+      },
+      "location": "EventChannel"
+    },
+    {
+      "@offset": -280,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "DC01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4769",
+            "channel": "Security",
+            "computer": "DC01"
+          },
+          "eventdata": {
+            "targetUserName": "jdoe@CORP.EXAMPLE",
+            "serviceName": "svc_sql02",
+            "ticketEncryptionType": "0x17",
+            "status": "0x0",
+            "ipAddress": "::ffff:10.20.30.17"
+          }
+        }
+      },
+      "location": "EventChannel"
+    },
+    {
+      "@offset": -270,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "DC01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4769",
+            "channel": "Security",
+            "computer": "DC01"
+          },
+          "eventdata": {
+            "targetUserName": "jdoe@CORP.EXAMPLE",
+            "serviceName": "svc_sql03",
+            "ticketEncryptionType": "0x17",
+            "status": "0x0",
+            "ipAddress": "::ffff:10.20.30.17"
+          }
+        }
+      },
+      "location": "EventChannel"
+    },
+    {
+      "@offset": -260,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "DC01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4769",
+            "channel": "Security",
+            "computer": "DC01"
+          },
+          "eventdata": {
+            "targetUserName": "jdoe@CORP.EXAMPLE",
+            "serviceName": "svc_sql04",
+            "ticketEncryptionType": "0x17",
+            "status": "0x0",
+            "ipAddress": "::ffff:10.20.30.17"
+          }
+        }
+      },
+      "location": "EventChannel"
+    },
+    {
+      "@offset": -250,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "DC01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4769",
+            "channel": "Security",
+            "computer": "DC01"
+          },
+          "eventdata": {
+            "targetUserName": "jdoe@CORP.EXAMPLE",
+            "serviceName": "svc_sql05",
+            "ticketEncryptionType": "0x17",
+            "status": "0x0",
+            "ipAddress": "::ffff:10.20.30.17"
+          }
+        }
+      },
+      "location": "EventChannel"
+    }
+  ],
+  "expect": [
+    "Kerberoasting - Service Ticket With RC4 Encryption",
+    "Many Kerberos Service Tickets Requested by One Account"
+  ],
+  "log_type": null,
+  "hunt": false
+}

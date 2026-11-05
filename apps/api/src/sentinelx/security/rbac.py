@@ -34,6 +34,9 @@ class Perm(StrEnum):
     ADMIN_MANAGE = "admin:manage"
     TENANT_SWITCH = "tenant:switch"
     PLATFORM_MANAGE = "platform:manage"  # installation-wide: rule repository, custom rules, organizations, demo
+    # decoys must stay secret from everyone who does not need them: an insider who can list the
+    # honeytokens can simply avoid them
+    DECEPTION_MANAGE = "deception:manage"
 
 
 _READ = {Perm.INCIDENT_READ, Perm.ALERT_READ, Perm.EVENT_READ, Perm.ASSET_READ, Perm.RULE_READ, Perm.THREATINTEL_READ}

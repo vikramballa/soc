@@ -15,11 +15,19 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from sentinelx.config import Settings, get_settings
 
+_base = Settings()
 if "TEST_DATABASE_URL" not in os.environ:
     # Same server and credentials as the app (from .env), separate database.
-    app_url = make_url(Settings().database_url)
+    app_url = make_url(_base.database_url)
     os.environ["TEST_DATABASE_URL"] = app_url.set(database="sentinelx_test").render_as_string(hide_password=False)
+if "TEST_DATABASE_OWNER_URL" not in os.environ and _base.database_owner_url:
+    # Two-role installation (ADR-013): migrations as the owner, every test as the least-privileged role.
+    owner_url = make_url(_base.database_owner_url)
+    os.environ["TEST_DATABASE_OWNER_URL"] = owner_url.set(database="sentinelx_test").render_as_string(
+        hide_password=False
+    )
 os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+os.environ["DATABASE_OWNER_URL"] = os.environ.get("TEST_DATABASE_OWNER_URL", "")
 os.environ["APP_ENV"] = "test"
 os.environ["LOG_JSON"] = "false"
 os.environ["LOG_LEVEL"] = "WARNING"
@@ -36,13 +44,13 @@ def _alembic_config() -> Config:
     cfg = Config(os.path.join(API_DIR, "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(API_DIR, "migrations"))
     cfg.attributes["configure_logger"] = False
-    cfg.attributes["database_url"] = os.environ["DATABASE_URL"]
+    cfg.attributes["database_url"] = os.environ["DATABASE_OWNER_URL"] or os.environ["DATABASE_URL"]
     return cfg
 
 
 @pytest.fixture(scope="session", autouse=True)
 async def database() -> AsyncIterator[None]:
-    engine = create_async_engine(os.environ["DATABASE_URL"])
+    engine = create_async_engine(os.environ["DATABASE_OWNER_URL"] or os.environ["DATABASE_URL"])
     async with engine.begin() as conn:
         await conn.execute(text("DROP SCHEMA public CASCADE"))
         await conn.execute(text("CREATE SCHEMA public"))
@@ -50,6 +58,9 @@ async def database() -> AsyncIterator[None]:
     import asyncio
 
     await asyncio.to_thread(command.upgrade, _alembic_config(), "head")
+    from sentinelx.persistence.grants import apply_runtime_grants
+
+    await apply_runtime_grants()
     from sentinelx.services.bootstrap import bootstrap
 
     await bootstrap()

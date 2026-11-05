@@ -177,13 +177,15 @@ async def test_row_level_security_blocks_unfiltered_queries() -> None:
 
 
 async def test_audit_log_is_append_only() -> None:
+    # Two layers: the runtime role has no UPDATE/DELETE privilege (ADR-013) and, even for the owner,
+    # a trigger rejects the change. Whichever the connection hits first must refuse.
     async with system_session() as s:
         s.add(AuditLog(id=uuid.uuid4(), actor="test", action="test.append", resource_type="test"))
     async with system_session() as s:
-        with pytest.raises(Exception, match="append-only"):
+        with pytest.raises(Exception, match=r"append-only|permission denied"):
             await s.execute(text("UPDATE audit_logs SET actor = 'tampered' WHERE action = 'test.append'"))
     async with system_session() as s:
-        with pytest.raises(Exception, match="append-only"):
+        with pytest.raises(Exception, match=r"append-only|permission denied"):
             await s.execute(text("DELETE FROM audit_logs WHERE action = 'test.append'"))
 
 

@@ -42,8 +42,9 @@ Keep using that form in scripts and docs.
 - Tests need a real PostgreSQL. They use a `sentinelx_test` database owned by the `sentinelx` role on the
   same server as `DATABASE_URL` from `.env`, or `TEST_DATABASE_URL` if set. The schema is rebuilt from
   migrations once per session.
-- Layout: `tests/unit`, `tests/integration`, `tests/security` (auth, RBAC, tenant isolation),
-  `tests/e2e` (demo scenarios end to end). Fixtures are in `tests/fixtures` and must stay synthetic.
+- Layout: `tests/unit`, `tests/integration`, `tests/security` (auth, RBAC, tenant isolation, platform hardening),
+  `tests/e2e` (demo scenarios and adversary replay end to end). With `DATABASE_OWNER_URL` set (or
+  `TEST_DATABASE_OWNER_URL`), migrations run as the owner and every test runs as the runtime role. Fixtures are in `tests/fixtures` and must stay synthetic.
 - Ollama is pointed at a closed port in tests; AI behavior is tested with mocks. Core features must pass
   with the AI unavailable.
 - Every behavior change ships with a test. Run `make test` and `make lint` before calling work done.
@@ -51,10 +52,17 @@ Keep using that form in scripts and docs.
 ## Invariants (do not break these)
 
 - **Never connect as a PostgreSQL superuser.** Superusers bypass row-level security. The app role is
-  `NOSUPERUSER NOBYPASSRLS`.
+  `NOSUPERUSER NOBYPASSRLS` and owns no tables; migrations run as `DATABASE_OWNER_URL` (ADR-013). Runtime code
+  must not need DDL. New tables get grants from `persistence/grants.py` automatically.
 - **Tenant isolation is two layers:** every query filters by `tenant_id`, and RLS policies (migration
   `0002`) enforce it again. New tenant-scoped tables need both a `tenant_id` column and an RLS policy.
-- **The audit log is append-only** (database trigger). Don't add update/delete paths for it.
+- **The audit log is append-only and hash-chained** (triggers, migration `0003`). Don't add update/delete paths,
+  and don't set `seq`/`prev_hash`/`row_hash` from Python.
+- **Watch the watcher.** Security-relevant admin actions call `services/selfmon.emit`; rules under
+  `security/sigma-rules/platform` and the deception/silence built-ins are protected from being disabled.
+  Sensitive endpoints use `require_fresh(...)` (step-up re-auth) instead of `require(...)`.
+- **Detections ship with a replay.** A new technique-level detection gets a synthetic scenario in
+  `security/attack-replay` (tested by `tests/e2e/test_attack_replay.py`).
 - **Permissions are enforced server-side** via `api/deps.require(Perm.X)`. The UI's `RequirePerm` only
   hides things. New endpoints need a permission and a row in `tests/security/test_rbac.py`.
 - **Detection never depends on the AI.** The AI is on-request, cannot change risk scores, and cannot take

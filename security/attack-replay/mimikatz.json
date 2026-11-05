@@ -1,0 +1,48 @@
+{
+  "id": "mimikatz",
+  "name": "Mimikatz on the command line",
+  "techniques": [
+    "T1003"
+  ],
+  "source": "wazuh",
+  "events": [
+    {
+      "@offset": -120,
+      "rule": {
+        "id": "61603",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "sysmon"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "WS-FIN-07",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "1",
+            "channel": "Microsoft-Windows-Sysmon/Operational",
+            "computer": "WS-FIN-07"
+          },
+          "eventdata": {
+            "image": "C:\\Users\\Public\\m.exe",
+            "commandLine": "C:\\Users\\Public\\m.exe privilege::debug sekurlsa::logonpasswords exit",
+            "parentImage": "C:\\Windows\\System32\\cmd.exe",
+            "user": "CORP\\jdoe"
+          }
+        }
+      },
+      "location": "EventChannel"
+    }
+  ],
+  "expect": [
+    "Credential Dumping Tool Keywords on the Command Line"
+  ],
+  "log_type": null,
+  "hunt": false
+}

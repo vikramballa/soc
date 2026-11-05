@@ -39,6 +39,8 @@ FAST_KINDS = [
     "tail_files",
     "wazuh_poll",
     "load_demo",
+    "hunt",
+    "audit_verify",
 ]
 
 
@@ -89,6 +91,16 @@ async def _handle(kind: str, tenant_id: uuid.UUID | None, payload: dict[str, Any
         from sentinelx.ingestion.wazuh_indexer import poll_wazuh_indexer
 
         return await poll_wazuh_indexer()
+    if kind == "hunt":
+        from sentinelx.hunting.service import run_hunts
+
+        assert tenant_id
+        async with tenant_session(tenant_id) as s:
+            return await run_hunts(s, tenant_id, beacons=bool(payload.get("beacons", True)))
+    if kind == "audit_verify":
+        from sentinelx.services.audit_chain import verify_and_alert
+
+        return await verify_and_alert()
     if kind == "load_demo":
         from sentinelx.demo.loader import load_demo
 
@@ -240,8 +252,17 @@ class Worker:
                     if s.wazuh_indexer_url and tick % 2 == 0:
                         await enqueue(db, "wazuh_poll", {}, dedup_key="wazuh_poll", max_attempts=1)
                     hour = now.strftime("%Y%m%d%H")
+                    hunt_bucket = int(now.timestamp() // (max(1, s.hunt_interval_minutes) * 60))
                     tenants = (await db.execute(select(Tenant.id))).scalars().all()
                     for t in tenants:
+                        await enqueue(
+                            db,
+                            "hunt",
+                            {"beacons": hunt_bucket % max(1, 60 // max(1, s.hunt_interval_minutes)) == 0},
+                            tenant_id=t,
+                            once=True,
+                            dedup_key=f"hunt:{t}:{hunt_bucket}",
+                        )
                         # score the current and previous hour every ~5 minutes, retrain daily
                         if tick % 60 == 0:
                             await enqueue(
@@ -256,6 +277,7 @@ class Worker:
                             db, "ml_train", {}, tenant_id=t, dedup_key=f"ml_train:{t}:{now:%Y%m%d}", once=True
                         )
                     await enqueue(db, "retention", {}, dedup_key=f"retention:{hour}", once=True)
+                    await enqueue(db, "audit_verify", {}, dedup_key=f"audit_verify:{hour}", once=True)
             except Exception as e:
                 log.warning("scheduler_error", error=str(e))
             tick += 1

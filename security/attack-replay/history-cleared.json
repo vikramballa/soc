@@ -1,0 +1,26 @@
+{
+  "id": "history-cleared",
+  "name": "Shell history cleared after interactive access",
+  "techniques": [
+    "T1070.003"
+  ],
+  "source": "sentinelx",
+  "events": [
+    {
+      "event_type": "process",
+      "event_action": "process_start",
+      "hostname": "web-01",
+      "os": "linux",
+      "username": "root",
+      "process_name": "bash",
+      "process_path": "/usr/bin/bash",
+      "process_command_line": "bash -c 'history -c; unset HISTFILE'",
+      "@offset": -120
+    }
+  ],
+  "expect": [
+    "Shell History Cleared or Disabled"
+  ],
+  "log_type": null,
+  "hunt": false
+}

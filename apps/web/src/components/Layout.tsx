@@ -9,6 +9,7 @@ import {
   BrainCircuit,
   ChevronsUpDown,
   FileText,
+  Fingerprint,
   Globe2,
   Grid3x3,
   KeyRound,
@@ -17,9 +18,11 @@ import {
   Menu,
   Moon,
   Plug,
+  Radar,
   Search,
   Settings,
   ShieldAlert,
+  ShieldCheck,
   Sun,
   Users,
 } from 'lucide-react'
@@ -30,6 +33,7 @@ import { useAuth } from '../lib/auth'
 import { CommandPalette } from './CommandPalette'
 import { Modal } from './overlay'
 import { toast, toastError } from './toast'
+import { TwoStepModal } from './TwoStep'
 import { Badge, Button, Input, Kbd, Label } from './ui'
 
 interface NavItem {
@@ -63,6 +67,8 @@ const NAV: { group: string; items: NavItem[] }[] = [
     group: 'Detection',
     items: [
       { to: '/rules', label: 'Detection Rules', icon: <BookOpenCheck /> },
+      { to: '/telemetry', label: 'Telemetry Health', icon: <Radar />, perm: 'rule:read' },
+      { to: '/deception', label: 'Deception', icon: <Fingerprint />, perm: 'deception:manage' },
       { to: '/ml', label: 'ML Analytics', icon: <BrainCircuit /> },
     ],
   },
@@ -218,6 +224,7 @@ function UserMenu() {
   const { me } = useAuth()
   const [open, setOpen] = useState(false)
   const [pw, setPw] = useState(false)
+  const [mfa, setMfa] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const qc = useQueryClient()
   const nav = useNavigate()
@@ -254,12 +261,19 @@ function UserMenu() {
               <KeyRound className="size-4" /> Change password
             </button>
           )}
+          {me.user.auth_provider === 'local' && (
+            <button onClick={() => { setMfa(true); setOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-muted hover:bg-surface-2 hover:text-fg">
+              <ShieldCheck className="size-4" /> Two-step verification
+              <span className="ml-auto text-[11.5px]">{me.user.mfa_enabled ? 'On' : 'Off'}</span>
+            </button>
+          )}
           <button onClick={logout} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] text-muted hover:bg-surface-2 hover:text-fg">
             <LogOut className="size-4" /> Sign out
           </button>
         </div>
       )}
       <PasswordModal open={pw} onClose={() => setPw(false)} />
+      <TwoStepModal open={mfa} onClose={() => setMfa(false)} />
     </div>
   )
 }

@@ -31,3 +31,20 @@ Administration → Ingest tokens). Body: JSON array, single object, NDJSON, or Z
 ## Asset context
 Assets are discovered automatically. Set **criticality**, owner and environment on the Assets page — they
 feed the risk score. Mark admin accounts as **privileged** on the Users page.
+
+## Telemetry health (sensor tamper detection)
+Every sender (Wazuh agent, Suricata or Zeek sensor) is tracked with its usual gap between deliveries.
+Once a sender has at least 2 hours of history, a gap longer than `max(SILENCE_MIN_MINUTES, 6 × usual gap)`
+raises **Telemetry Stopped Arriving**. It is raised to high when the host had a detection just before
+going quiet. For planned work, mute the sender on the **Telemetry Health** page. Mutes are audited and
+produce a low-severity platform alert.
+
+## Canarytokens
+Create an ingest token limited to the `canarytokens` source and set the Canarytokens webhook to
+`https://<sentinelx>/api/v1/ingest/canarytokens?token=sxi_...`. Every trigger becomes a critical incident.
+Built-in honeytokens (decoy accounts, hosts, IPs, files, credentials) are managed on the **Deception** page.
+
+## Ingest token scope
+Limit each token to the sources and networks it needs (Administration → Ingest tokens). A request outside
+the scope is refused and raises **SentinelX Ingest Token Used Outside Its Scope**. The first use from a new
+address raises a medium alert.

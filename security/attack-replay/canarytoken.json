@@ -1,0 +1,25 @@
+{
+  "id": "canarytoken",
+  "name": "Canarytokens document opened",
+  "techniques": [],
+  "source": "canarytokens",
+  "events": [
+    {
+      "@offset": -30,
+      "manage_url": "https://canary.example/manage",
+      "memo": "Finance share - salaries.docx",
+      "channel": "HTTP",
+      "src_ip": "198.51.100.44",
+      "token": "x8k2mq0canary",
+      "token_type": "ms_word",
+      "additional_data": {
+        "useragent": "Microsoft Office Word 2014"
+      }
+    }
+  ],
+  "expect": [
+    "Canarytoken Triggered"
+  ],
+  "log_type": null,
+  "hunt": false
+}

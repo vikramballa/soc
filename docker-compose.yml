@@ -20,6 +20,8 @@ x-app-env: &app-env
   API_CORS_ORIGINS: ${APP_BASE_URL:-http://localhost:8000}
   SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
   DATABASE_URL: postgresql+asyncpg://sentinelx:${SENTINELX_DB_PASSWORD:?set SENTINELX_DB_PASSWORD}@postgres:5432/sentinelx
+  # schema owner, used only by migrations (ADR-013); the app role above owns nothing
+  DATABASE_OWNER_URL: postgresql+asyncpg://sentinelx_owner:${SENTINELX_OWNER_DB_PASSWORD:?set SENTINELX_OWNER_DB_PASSWORD}@postgres:5432/sentinelx
   BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@sentinelx.local}
   BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
   OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
@@ -48,6 +50,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
       SENTINELX_DB_PASSWORD: ${SENTINELX_DB_PASSWORD}
+      SENTINELX_OWNER_DB_PASSWORD: ${SENTINELX_OWNER_DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init-sentinelx.sh:/docker-entrypoint-initdb.d/10-sentinelx.sh:ro

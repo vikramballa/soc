@@ -21,6 +21,8 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [mfaStep, setMfaStep] = useState(false)
+  const [code, setCode] = useState('')
   const [params] = useSearchParams()
   const nav = useNavigate()
   const qc = useQueryClient()
@@ -32,15 +34,31 @@ export default function Login() {
     setBusy(true)
     setError(null)
     try {
-      await api.post('/auth/login', { email: email.trim(), password })
+      if (mfaStep) {
+        await api.post('/auth/mfa/verify', { code: code.trim() })
+      } else {
+        const r = await api.post<{ ok: boolean; mfa_required?: boolean }>('/auth/login', { email: email.trim(), password })
+        if (r.mfa_required) {
+          setMfaStep(true)
+          setPassword('')
+          return
+        }
+      }
       await qc.invalidateQueries({ queryKey: ['me'] })
       const next = params.get('next')
       nav(next && next.startsWith('/') && !next.startsWith('//') ? next : '/', { replace: true })
     } catch (err) {
+      if (mfaStep && err instanceof ApiError && err.message.includes('expired')) setMfaStep(false)
       setError(err instanceof ApiError ? err.message : 'Sign-in failed')
     } finally {
       setBusy(false)
     }
+  }
+  const cancelMfa = async () => {
+    await api.post('/auth/logout').catch(() => undefined)
+    setMfaStep(false)
+    setCode('')
+    setError(null)
   }
 
   return (
@@ -83,7 +101,7 @@ export default function Login() {
             <span className="text-[16px] font-semibold">SentinelX</span>
           </div>
           <h2 className="text-[20px] font-semibold tracking-[-0.015em]">Sign in</h2>
-          <p className="mt-1 text-[13px] text-muted">Use the account your administrator created for you.</p>
+          <p className="mt-1 text-[13px] text-muted">{mfaStep ? 'Two-step verification is on for this account.' : 'Use the account your administrator created for you.'}</p>
 
           {(error || ssoError) && (
             <div role="alert" className="mt-5 rounded-lg border border-danger/25 bg-danger/8 px-3 py-2.5 text-[13px] text-danger">
@@ -91,7 +109,22 @@ export default function Login() {
             </div>
           )}
 
-          {cfg.data?.local_login !== false && (
+          {mfaStep && (
+            <form onSubmit={submit} className="mt-6 space-y-4">
+              <label className="block">
+                <Label hint="Or one of your recovery codes">Code from your authenticator app</Label>
+                <Input autoFocus inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
+              </label>
+              <Button type="submit" variant="primary" className="w-full" loading={busy}>
+                Verify <ArrowRight className="size-3.5" />
+              </Button>
+              <button type="button" onClick={cancelMfa} className="w-full text-center text-[12.5px] text-faint hover:text-fg">
+                Use a different account
+              </button>
+            </form>
+          )}
+
+          {!mfaStep && cfg.data?.local_login !== false && (
             <form onSubmit={submit} className="mt-6 space-y-4">
               <label className="block">
                 <Label>Email</Label>
@@ -107,7 +140,7 @@ export default function Login() {
             </form>
           )}
 
-          {cfg.data?.sso && (
+          {!mfaStep && cfg.data?.sso && (
             <>
               <div className="my-5 flex items-center gap-3 text-[12px] text-faint">
                 <span className="h-px flex-1 bg-line" /> or <span className="h-px flex-1 bg-line" />

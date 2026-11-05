@@ -107,6 +107,7 @@ def parse(rec: dict[str, Any], tenant_id: uuid.UUID) -> CanonicalEvent:
             issuer=t.get("issuerdn"),
             version=t.get("version"),
             ja3=(t.get("ja3") or {}).get("hash"),
+            ja4=t.get("ja4") if isinstance(t.get("ja4"), str) else None,
         )
     elif et in ("flow", "netflow"):
         f = rec.get("flow") or rec.get("netflow") or {}

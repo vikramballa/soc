@@ -45,10 +45,22 @@ def test_risk_is_explained_bounded_and_monotonic() -> None:
         "correlation_strength",
         "behavioral_anomaly",
         "attack_stage",
+        "attack_progression",
     }
     for c in high.contributors:
         assert 0 <= c.value <= c.max and c.reason
     assert round(sum(c.value for c in high.contributors)) >= high.score  # clipped at 100, never inflated
+
+
+def test_attack_progression_rewards_multi_phase_intrusions() -> None:
+    one = score_incident(RiskInputs(max_alert_severity=60, tactics=["execution", "persistence"]))
+    chain = score_incident(
+        RiskInputs(max_alert_severity=60, tactics=["initial-access", "execution", "lateral-movement", "exfiltration"])
+    )
+    prog = {c.key: c for c in chain.contributors}["attack_progression"]
+    assert prog.value == 10 and len(prog.evidence) == 4
+    assert {c.key: c for c in one.contributors}["attack_progression"].value == 0
+    assert chain.score > one.score
 
 
 def test_bands_and_confidence() -> None:

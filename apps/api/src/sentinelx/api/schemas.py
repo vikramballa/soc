@@ -229,7 +229,7 @@ class IndicatorOut(ORM):
 
 class IndicatorIn(BaseModel):
     value: str = Field(min_length=3, max_length=1024)
-    type: Literal["ip", "domain", "hash", "url"] | None = None
+    type: Literal["ip", "domain", "hash", "url", "ja3", "ja4"] | None = None
     confidence: float = Field(0.7, ge=0, le=1)
     verdict: Literal["malicious", "suspicious", "benign"] = "malicious"
     tags: list[str] = Field(default_factory=list, max_length=20)
@@ -292,6 +292,7 @@ class UserOut(ORM):
     is_active: bool
     last_login_at: datetime | None
     created_at: datetime
+    mfa_enabled_at: datetime | None = None
 
 
 class UserIn(BaseModel):
@@ -318,6 +319,8 @@ class AuditOut(ORM):
     source_ip: str | None
     request_id: str | None
     created_at: datetime
+    seq: int | None = None
+    row_hash: str | None = None
 
 
 class ResponseActionIn(BaseModel):

@@ -73,6 +73,11 @@ class User(Base):
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created()
+    # TOTP two-step verification. The secret is encrypted at rest (security/secretbox.py).
+    mfa_secret: Mapped[str | None] = mapped_column(Text)
+    mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mfa_last_step: Mapped[int | None] = mapped_column(BigInteger)  # replay protection
+    mfa_recovery_hashes: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
 
 
 class Session(Base):
@@ -86,6 +91,10 @@ class Session(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ip: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(300))
+    # password accepted but the second factor is still outstanding: the session grants nothing yet
+    mfa_pending: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # last time the user proved who they are (login or re-authentication); gates sensitive changes
+    reauth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class IngestToken(Base):
@@ -98,6 +107,11 @@ class IngestToken(Base):
     created_at: Mapped[datetime] = _created()
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Scope: empty means unrestricted. A stolen token is only useful for the sources and networks listed.
+    allowed_sources: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+    allowed_cidrs: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+    last_used_ip: Mapped[str | None] = mapped_column(String(64))
+    known_ips: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
 
 
 class Asset(Base):
@@ -553,7 +567,10 @@ class AuditLog(Base):
     """Append-only (UPDATE/DELETE blocked by a database trigger)."""
 
     __tablename__ = "audit_logs"
-    __table_args__ = (Index("ix_audit_tenant_ts", "tenant_id", text("created_at DESC")),)
+    __table_args__ = (
+        Index("ix_audit_tenant_ts", "tenant_id", text("created_at DESC")),
+        UniqueConstraint("seq", name="uq_audit_logs_seq"),
+    )
     id: Mapped[uuid.UUID] = _uuid()
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -566,6 +583,73 @@ class AuditLog(Base):
     source_ip: Mapped[str | None] = mapped_column(String(64))
     request_id: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = _created()
+    # Hash chain, filled by the ``audit_logs_chain`` trigger: row_hash = sha256(prev_hash | row fields).
+    seq: Mapped[int | None] = mapped_column(BigInteger)
+    prev_hash: Mapped[str | None] = mapped_column(String(64))
+    row_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class AuditChainHead(Base):
+    """Single-row head of the audit hash chain (global, internal; updated only by the chain trigger)."""
+
+    __tablename__ = "audit_chain_head"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seq: Mapped[int] = mapped_column(BigInteger, default=0)
+    hash: Mapped[str] = mapped_column(String(64))
+
+
+class TelemetrySource(Base):
+    """Liveness of one sender (sensor or agent) - a source that goes quiet is itself a signal."""
+
+    __tablename__ = "telemetry_sources"
+    __table_args__ = (UniqueConstraint("tenant_id", "source_type", "hostname"),)
+    id: Mapped[uuid.UUID] = _uuid()
+    tenant_id: Mapped[uuid.UUID] = _tenant()
+    source_type: Mapped[str] = mapped_column(String(16))
+    hostname: Mapped[str] = mapped_column(String(255))
+    first_seen: Mapped[datetime] = _created()
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # wall clock of last receipt
+    last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    event_count: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    avg_gap_seconds: Mapped[float | None] = mapped_column(Float)  # EWMA of gaps between receipts
+    silent_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    muted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mute_reason: Mapped[str | None] = mapped_column(String(300))
+
+
+class EntityPrevalence(Base):
+    """How common a value is in this organization (first seen, last seen, on which hosts)."""
+
+    __tablename__ = "entity_prevalence"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "kind", "value"),
+        Index("ix_entity_prevalence_kind_first", "tenant_id", "kind", "first_seen"),
+    )
+    id: Mapped[uuid.UUID] = _uuid()
+    tenant_id: Mapped[uuid.UUID] = _tenant()
+    kind: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(String(512))
+    first_seen: Mapped[datetime] = _created()
+    last_seen: Mapped[datetime] = _created()
+    seen_count: Mapped[int] = mapped_column(BigInteger, default=1, server_default="1")
+    hosts: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+
+
+class Honeytoken(Base):
+    """A decoy (account, host, IP, domain, file, credential) that nothing legitimate should ever touch."""
+
+    __tablename__ = "honeytokens"
+    __table_args__ = (UniqueConstraint("tenant_id", "kind", "value"),)
+    id: Mapped[uuid.UUID] = _uuid()
+    tenant_id: Mapped[uuid.UUID] = _tenant()
+    kind: Mapped[str] = mapped_column(String(16))
+    value: Mapped[str] = mapped_column(String(512))
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    created_by: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = _created()
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trigger_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Job(Base):
@@ -625,4 +709,7 @@ TENANT_TABLES = [
     "ml_models",
     "ml_predictions",
     "ai_investigations",
+    "telemetry_sources",
+    "entity_prevalence",
+    "honeytokens",
 ]

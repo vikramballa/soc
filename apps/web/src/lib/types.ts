@@ -9,7 +9,17 @@ export interface Page<T> {
 }
 
 export interface Me {
-  user: { id: string; email: string; display_name: string; role: string; role_description: string; auth_provider: string }
+  user: {
+    id: string
+    email: string
+    display_name: string
+    role: string
+    role_description: string
+    auth_provider: string
+    mfa_enabled: boolean
+    mfa_enrollment_required: boolean
+  }
+  reauth_valid: boolean
   permissions: string[]
   tenant: { id: string; name: string; slug: string; demo: boolean } | null
   home_tenant_id: string

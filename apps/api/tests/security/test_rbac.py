@@ -97,6 +97,11 @@ MATRIX: list[tuple[str, str, Any, Perm | None]] = [
     ("GET", "/api/v1/admin/audit-logs", None, Perm.AUDIT_READ),
     ("POST", "/api/v1/detections/sync", None, Perm.PLATFORM_MANAGE),
     ("POST", "/api/v1/admin/tenants", {"name": "X Org", "slug": "x-org-{n}"}, Perm.PLATFORM_MANAGE),
+    ("GET", "/api/v1/admin/audit-chain", None, Perm.PLATFORM_MANAGE),
+    ("GET", "/api/v1/deception/honeytokens", None, Perm.DECEPTION_MANAGE),
+    ("POST", "/api/v1/deception/honeytokens", {"kind": "host", "value": "decoy-{n}"}, Perm.DECEPTION_MANAGE),
+    ("GET", "/api/v1/telemetry/sources", None, Perm.RULE_READ),
+    ("GET", "/api/v1/auth/mfa", None, None),
 ]
 
 

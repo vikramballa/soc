@@ -28,6 +28,14 @@ def _alembic_upgrade() -> None:
     cfg.set_main_option("script_location", str(API_DIR / "migrations"))
     cfg.attributes["configure_logger"] = False
     command.upgrade(cfg, "head")
+    # least-privilege runtime role (ADR-013): re-applied after every migration so new tables are covered
+    from sentinelx.persistence.grants import apply_runtime_grants
+
+    result = _run(apply_runtime_grants())
+    if result.get("applied"):
+        typer.echo(
+            f"✓ runtime role '{result['runtime_role']}' granted data access only (owner: {result['owner_role']})"
+        )
 
 
 @app.command()
@@ -288,6 +296,29 @@ def doctor() -> None:
                 "connected as a non-superuser role (row-level security is enforced)",
                 "superusers bypass RLS — use the dedicated sentinelx role",
             )
+            from sentinelx.persistence.db import get_engine
+            from sentinelx.persistence.grants import privilege_report
+
+            async with get_engine().connect() as conn:
+                priv = await privilege_report(conn)
+            line(not priv["bypass_rls"], "runtime role cannot bypass row-level security", "ALTER ROLE ... NOBYPASSRLS")
+            owner_ok = priv["owned_tables"] == 0 and not priv["audit_update"] and not priv["audit_delete"]
+            line(
+                owner_ok or not s.is_production,
+                "runtime role owns no tables and cannot rewrite the audit trail"
+                + ("" if owner_ok else " (development: single-role install)"),
+                "set DATABASE_OWNER_URL for migrations and connect the app as a separate role - "
+                "scripts/harden-db.sh does this (docs/adr/ADR-013-least-privilege-database-roles.md)",
+            )
+            from sentinelx.services.audit_chain import verify_chain
+
+            async with system_session() as db:
+                chain = await verify_chain(db)
+            line(
+                chain.ok,
+                f"audit trail hash chain intact ({chain.rows_checked} records, head {chain.head_hash[:12]}…)",
+                f"{len(chain.problems)} problem(s): {chain.problems[:2]}",
+            )
         except Exception as e:
             line(False, "PostgreSQL reachable", f"{type(e).__name__}: check DATABASE_URL ({e})")
         st = await OllamaClient().status(s.ollama_model)
@@ -314,6 +345,96 @@ def doctor() -> None:
     for p in s.validate_for_production():
         line(False, "production settings", p)
     sys.exit(0 if ok else 1)
+
+
+@app.command("audit-verify")
+def audit_verify(as_json: bool = typer.Option(False, "--json", help="Machine-readable output")) -> None:
+    """Check the tamper-evident audit trail. Store the printed head hash outside SentinelX (ticket, WORM
+    storage) - a later run with a different history for the same sequence number reveals a rewrite."""
+
+    async def go() -> dict[str, Any]:
+        from sentinelx.persistence.db import dispose_engine, system_session
+        from sentinelx.services.audit_chain import verify_chain
+
+        async with system_session() as s:
+            rep = await verify_chain(s)
+        await dispose_engine()
+        return rep.as_dict()
+
+    rep = _run(go())
+    if as_json:
+        typer.echo(json.dumps(rep, indent=2))
+    else:
+        typer.echo(
+            f"{'✓' if rep['ok'] else '✗'} {rep['rows_checked']} audit records checked · "
+            f"head #{rep['head_seq']} {rep['head_hash']}"
+        )
+        for p in rep["problems"]:
+            typer.echo(f"  ✗ seq {p['seq']}: {p['kind']} - {p['detail']}")
+    sys.exit(0 if rep["ok"] else 1)
+
+
+@app.command("sigma-import")
+def sigma_import(
+    path: Path = typer.Argument(..., help="Directory of Sigma rules, e.g. a clone of github.com/SigmaHQ/sigma/rules"),
+    min_status: str = typer.Option("test", help="experimental | test | stable"),
+    min_level: str = typer.Option("medium", help="informational | low | medium | high | critical"),
+    disabled: bool = typer.Option(False, help="Import rules switched off (review, then enable)"),
+    dry_run: bool = typer.Option(False, help="Only report what would be imported"),
+    source: str = typer.Option("SigmaHQ", help="Attribution label"),
+) -> None:
+    """Import community Sigma rules as custom rules (each one compiled and validated first)."""
+    if not path.is_dir():
+        typer.echo(f"✗ {path} is not a directory")
+        sys.exit(2)
+
+    async def go() -> dict[str, Any]:
+        from sentinelx.detection.sigma.importer import import_directory
+        from sentinelx.persistence.db import dispose_engine, system_session
+
+        async with system_session() as s:
+            rep = await import_directory(
+                s,
+                path,
+                source=source,
+                min_status=min_status,
+                min_level=min_level,
+                enable=not disabled,
+                dry_run=dry_run,
+            )
+        await dispose_engine()
+        return rep.as_dict()
+
+    rep = _run(go())
+    typer.echo(json.dumps(rep, indent=2))
+
+
+@app.command("validate-detections")
+def validate_detections(as_json: bool = typer.Option(False, "--json")) -> None:
+    """Replay the synthetic attack scenarios in security/attack-replay through the real pipeline and
+    report which detections fired (exit code 1 if any expected detection is missing)."""
+
+    async def go() -> list[dict[str, Any]]:
+        from sentinelx.detection.engine import sync_rules_to_db
+        from sentinelx.detection.replay import run_all
+        from sentinelx.persistence.db import dispose_engine, system_session
+
+        async with system_session() as s:
+            await sync_rules_to_db(s, actor="validate-detections")
+        out = [r.as_dict() for r in await run_all()]
+        await dispose_engine()
+        return out
+
+    results = _run(go())
+    if as_json:
+        typer.echo(json.dumps(results, indent=2))
+    else:
+        for r in results:
+            mark = "✓" if r["passed"] else "✗"
+            typer.echo(f"  {mark} {r['name']}" + (f"  — missing: {', '.join(r['missing'])}" if r["missing"] else ""))
+        passed = sum(r["passed"] for r in results)
+        typer.echo(f"{passed}/{len(results)} attack scenarios detected")
+    sys.exit(0 if all(r["passed"] for r in results) else 1)
 
 
 if __name__ == "__main__":

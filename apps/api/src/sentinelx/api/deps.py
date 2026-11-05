@@ -22,6 +22,10 @@ from sentinelx.security.rbac import Perm, permissions_for
 from sentinelx.services.audit import audit
 
 TENANT_HEADER = "X-SentinelX-Tenant"
+REAUTH_HEADER = "X-SentinelX-Reauth"
+MFA_ROLES = ("SUPER_ADMIN", "TENANT_ADMIN")
+# Paths an admin who still has to enrol in two-step verification may use.
+_ENROLMENT_PATHS = ("/api/v1/auth/",)
 
 
 @dataclass
@@ -34,9 +38,21 @@ class Principal:
     tenant_id: uuid.UUID  # effective tenant for this request
     session_id: uuid.UUID | None
     permissions: frozenset[Perm]
+    reauth_at: datetime | None = None
+    mfa_enabled: bool = False
+    mfa_enrollment_required: bool = False
 
     def can(self, perm: Perm) -> bool:
         return perm in self.permissions
+
+    def recently_authenticated(self) -> bool:
+        """Step-up check for sensitive changes. SSO (bearer) principals re-authenticate at the IdP."""
+        if self.session_id is None:
+            return True
+        if self.reauth_at is None:
+            return False
+        window = timedelta(minutes=get_settings().reauth_window_minutes)
+        return datetime.now(UTC) - self.reauth_at <= window
 
 
 def client_ip(request: Request) -> str | None:
@@ -58,6 +74,7 @@ async def _principal_from_session(request: Request) -> Principal | None:
                     DbSession.token_hash == token_hash(token),
                     DbSession.revoked_at.is_(None),
                     DbSession.expires_at > now,
+                    DbSession.mfa_pending.is_(False),
                     User.is_active.is_(True),
                 )
             )
@@ -70,6 +87,7 @@ async def _principal_from_session(request: Request) -> Principal | None:
         if sess.expires_at - now < ttl / 2:
             sess.expires_at = now + ttl
             request.state.refresh_session = True
+        mfa_enabled = user.mfa_enabled_at is not None
         return Principal(
             user.id,
             user.email,
@@ -79,6 +97,14 @@ async def _principal_from_session(request: Request) -> Principal | None:
             user.tenant_id,
             sess.id,
             permissions_for(user.role),
+            reauth_at=sess.reauth_at,
+            mfa_enabled=mfa_enabled,
+            mfa_enrollment_required=(
+                s.mfa_enforced_for_admins
+                and user.role in MFA_ROLES
+                and user.auth_provider == "local"
+                and not mfa_enabled
+            ),
         )
 
 
@@ -92,6 +118,10 @@ async def get_principal(request: Request) -> Principal:
             principal = await principal_from_bearer(request)
         if principal is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not signed in")
+        if principal.mfa_enrollment_required and not request.url.path.startswith(_ENROLMENT_PATHS):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "mfa_enrollment_required: set up two-step verification to continue"
+            )
         requested = request.headers.get(TENANT_HEADER)
         if requested and requested != str(principal.tenant_id):
             # Never trust a browser-supplied tenant id: only SUPER_ADMIN may switch, and the tenant must exist.
@@ -128,6 +158,23 @@ def require(*perms: Perm) -> Callable[..., Coroutine[Any, Any, Principal]]:
                     source_ip=client_ip(request),
                 )
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing permission: {', '.join(missing)}")
+        return principal
+
+    return dep
+
+
+def require_fresh(*perms: Perm) -> Callable[..., Coroutine[Any, Any, Principal]]:
+    """Like ``require`` but also demands a recent password (and second-factor) check. A stolen session
+    cookie alone is then not enough to disable rules, mint tokens or change roles."""
+    base = require(*perms)
+
+    async def dep(request: Request, principal: Principal = Depends(base)) -> Principal:
+        if not principal.recently_authenticated():
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "reauth_required: confirm your password to make this change",
+                headers={REAUTH_HEADER: "required"},
+            )
         return principal
 
     return dep

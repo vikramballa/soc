@@ -15,7 +15,8 @@ target_metadata = Base.metadata
 
 
 def _url() -> str:
-    return config.attributes.get("database_url") or get_settings().database_url
+    # migrations run as the schema owner when one is configured (ADR-013)
+    return config.attributes.get("database_url") or get_settings().migration_url
 
 
 def run_migrations_offline() -> None:

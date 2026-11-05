@@ -10,9 +10,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SourceType = Literal["wazuh", "suricata", "zeek", "sentinelx", "other"]
+SourceType = Literal["wazuh", "suricata", "zeek", "sentinelx", "canarytokens", "other"]
 EventType = Literal[
-    "authentication", "process", "network", "dns", "http", "tls", "file", "iam", "alert", "ssh", "other"
+    "authentication", "process", "network", "dns", "http", "tls", "file", "iam", "alert", "ssh", "registry", "other"
 ]
 
 # Namespace for deterministic event ids: uuid5(NS, tenant|source|native-key)
@@ -191,6 +191,12 @@ def extract_indicators(ev: CanonicalEvent | dict[str, Any]) -> list[tuple[str, s
         out.append(("hash", get("file_hash")))
     if get("url") and str(get("url")).startswith(("http://", "https://")):
         out.append(("url", get("url")))
+    # TLS client fingerprints: a watchlist can name known-bad JA3 / JA4 values (C2 frameworks, loaders)
+    meta = get("metadata") or {}
+    for key in ("ja3", "ja4"):
+        v = meta.get(key) if isinstance(meta, dict) else None
+        if isinstance(v, str) and v:
+            out.append((key, v.lower()))
     return out
 
 
@@ -231,6 +237,8 @@ def summarize(ev: CanonicalEvent) -> str:
         if a == "user_created":
             return f"New account created: {target}{on}"
         return f"Account change ({a}){on}"
+    if ev.event_type == "registry":
+        return f"Registry {a or 'change'}{on}: {ev.metadata.get('registry_key') or ''}"[:200]
     if ev.event_type == "alert":
         return f"{ev.source_type.capitalize()} alert: {ev.rule_name or ev.event_category or 'alert'}"
     return ev.rule_name or ev.event_category or f"{ev.source_type} {ev.event_type} event"

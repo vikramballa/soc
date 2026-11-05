@@ -1,0 +1,27 @@
+{
+  "id": "remote-service-rpc",
+  "name": "Remote service creation over RPC (svcctl)",
+  "techniques": [
+    "T1021",
+    "T1569.002"
+  ],
+  "source": "zeek",
+  "log_type": "dce_rpc",
+  "events": [
+    {
+      "@offset": -80,
+      "uid": "Csvc1",
+      "id.orig_h": "10.20.30.17",
+      "id.orig_p": 50210,
+      "id.resp_h": "10.20.30.40",
+      "id.resp_p": 445,
+      "endpoint": "svcctl",
+      "operation": "CreateServiceW",
+      "named_pipe": "\\pipe\\svcctl"
+    }
+  ],
+  "expect": [
+    "Remote Service or Scheduled Task Created Over RPC"
+  ],
+  "hunt": false
+}

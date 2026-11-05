@@ -92,6 +92,25 @@ async def refresh_custom_rules(session: AsyncSession, force: bool = False) -> Co
     return compiled
 
 
+def protected_rule_uids() -> set[str]:
+    """Rules that watch SentinelX itself (logsource product ``sentinelx_platform``) plus the deception and
+    telemetry-silence evaluators. An organization cannot switch these off: disabling the tamper alarm
+    is exactly what an intruder would do first."""
+    from sentinelx.detection.builtin import PROTECTED_BUILTINS
+    from sentinelx.detection.sigma.rules import PLATFORM_PRODUCT
+
+    rs = get_rules().ruleset
+    uids = {r.uid for r in rs.rules if r.logsource.get("product") == PLATFORM_PRODUCT}
+    by_uid = {r.uid: r for r in rs.rules}
+    for c in rs.correlations:
+        if c.resolved_refs and all(
+            ref in uids or (ref in by_uid and by_uid[ref].logsource.get("product") == PLATFORM_PRODUCT)
+            for ref in c.resolved_refs
+        ):
+            uids.add(c.uid)
+    return uids | PROTECTED_BUILTINS
+
+
 async def enabled_rule_uids(session: AsyncSession, tenant_id: uuid.UUID | None = None) -> set[str]:
     """Globally enabled rules minus the ones this tenant switched off (per-tenant tuning)."""
     rows = set((await session.execute(select(DetectionRule.rule_uid).where(DetectionRule.enabled.is_(True)))).scalars())
@@ -99,7 +118,7 @@ async def enabled_rule_uids(session: AsyncSession, tenant_id: uuid.UUID | None =
         from sentinelx.persistence.models import Tenant
 
         t = await session.get(Tenant, tenant_id)
-        rows -= set(((t.settings or {}) if t else {}).get("disabled_rules", []))
+        rows -= set(((t.settings or {}) if t else {}).get("disabled_rules", [])) - protected_rule_uids()
     return rows
 
 

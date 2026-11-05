@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { MfaEnrollmentScreen, ReauthHost } from '../components/TwoStep'
 import { api, ApiError, setUnauthorizedHandler } from './api'
 import type { Me } from './types'
 
@@ -38,10 +39,12 @@ export function AuthGate({ children, fallback }: { children: ReactNode; fallback
     }
   }, [q.error, nav, loc])
   if (!q.data) return <>{fallback}</>
+  if (q.data.user.mfa_enrollment_required) return <MfaEnrollmentScreen me={q.data} />
   const perms = new Set(q.data.permissions)
   return (
     <Ctx.Provider value={{ me: q.data, can: (p) => perms.has(p), isSuperAdmin: perms.has('tenant:switch') }}>
       {children}
+      <ReauthHost me={q.data} />
     </Ctx.Provider>
   )
 }

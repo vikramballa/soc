@@ -105,6 +105,8 @@ _MISP_TYPES = {
     "domain": ["domain", "hostname", "domain|ip"],
     "hash": ["md5", "sha1", "sha256", "filename|md5", "filename|sha256"],
     "url": ["url", "uri"],
+    "ja3": ["ja3-fingerprint-md5"],
+    "ja4": ["ja4-fingerprint"],
 }
 
 

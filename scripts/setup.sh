@@ -29,8 +29,16 @@ if [[ ! -f "$ROOT/.env" ]]; then
   say "Creating database role and database on $PGHOST:$PGPORT (as $PGUSER)"
   pg_isready -q -h "$PGHOST" -p "$PGPORT" || fail "PostgreSQL is not reachable on $PGHOST:$PGPORT (set PGHOST/PGPORT)"
   DBPW="$(openssl rand -hex 16)"
-  psql -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 -q <<SQL || fail "could not create role/database — run as a PostgreSQL superuser (PGUSER=...)"
+  OWNERPW="$(openssl rand -hex 16)"
+  # Two roles (ADR-013): sentinelx_owner owns the schema and runs migrations; the app connects as
+  # sentinelx, which owns nothing and so cannot disable the audit trigger or row-level security.
+  psql -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 -q <<SQL || fail "could not create roles/database — run as a PostgreSQL superuser (PGUSER=...)"
 DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sentinelx_owner') THEN
+    CREATE ROLE sentinelx_owner LOGIN PASSWORD '$OWNERPW' NOSUPERUSER NOCREATEROLE NOCREATEDB NOBYPASSRLS;
+  ELSE
+    ALTER ROLE sentinelx_owner PASSWORD '$OWNERPW';
+  END IF;
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sentinelx') THEN
     CREATE ROLE sentinelx LOGIN PASSWORD '$DBPW' NOSUPERUSER NOCREATEROLE NOCREATEDB NOBYPASSRLS;
   ELSE
@@ -39,17 +47,21 @@ DO \$\$ BEGIN
 END \$\$;
 SQL
   psql -U "$PGUSER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='sentinelx'" | grep -q 1 \
-    || psql -U "$PGUSER" -d postgres -q -c "CREATE DATABASE sentinelx OWNER sentinelx"
+    || psql -U "$PGUSER" -d postgres -q -c "CREATE DATABASE sentinelx OWNER sentinelx_owner"
+  psql -U "$PGUSER" -d postgres -q -c "GRANT CONNECT ON DATABASE sentinelx TO sentinelx"
   cp "$ROOT/.env.example" "$ROOT/.env"
   sed -i.bak \
     -e "s|^APP_SECRET=.*|APP_SECRET=$(openssl rand -hex 32)|" \
     -e "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://sentinelx:$DBPW@$PGHOST:$PGPORT/sentinelx|" \
+    -e "s|^DATABASE_OWNER_URL=.*|DATABASE_OWNER_URL=postgresql+asyncpg://sentinelx_owner:$OWNERPW@$PGHOST:$PGPORT/sentinelx|" \
     -e "s|^LOG_JSON=.*|LOG_JSON=false|" \
     "$ROOT/.env" && rm -f "$ROOT/.env.bak"
   chmod 600 "$ROOT/.env"
   ok ".env written (secrets generated)"
 else
   ok ".env already exists — keeping it"
+  grep -qE '^DATABASE_OWNER_URL=.+' "$ROOT/.env" \
+    || say "Recommended: split database roles with  PGUSER=<superuser> ./scripts/harden-db.sh  (ADR-013)"
 fi
 
 say "Installing backend (Python 3.12 via uv)"

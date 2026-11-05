@@ -35,8 +35,32 @@ CATEGORY_EVENT_TYPES: dict[str, set[str]] = {
     "webserver": {"http"},
     "tls": {"tls"},
     "ids_alert": {"alert"},
+    # Sysmon / Windows categories (parsed from Wazuh, see ingestion/parsers/wazuh.py)
+    "process_access": {"process"},
+    "registry_set": {"registry"},
+    "registry_add": {"registry"},
+    "registry_delete": {"registry"},
+    "registry_event": {"registry"},
+    "ps_script": {"process"},
+    "create_remote_thread": {"process"},
+    "pipe_created": {"other"},
+    "wmi_event": {"other"},
+    "image_load": {"other"},
+    "driver_load": {"other"},
+    "file_access": {"file"},
+    "file_rename": {"file"},
 }
-SOURCE_PRODUCTS = {"zeek", "suricata", "wazuh"}
+# Event actions that are "process" events but not process starts; categories select exactly one of them.
+CATEGORY_ACTIONS: dict[str, set[str]] = {
+    "process_access": {"process_access"},
+    "create_remote_thread": {"create_remote_thread"},
+    "ps_script": {"powershell_script"},
+    "image_load": {"image_load"},
+}
+NON_CREATION_ACTIONS = {"process_access", "create_remote_thread", "powershell_script"}
+SOURCE_PRODUCTS = {"zeek", "suricata", "wazuh", "canarytokens"}
+# events SentinelX records about itself (services/selfmon.py)
+PLATFORM_PRODUCT = "sentinelx_platform"
 OS_PRODUCTS = {"windows", "linux", "macos"}
 
 
@@ -82,8 +106,15 @@ class SigmaRule:
     def applies_to(self, ev: dict[str, Any]) -> bool:
         if self.event_types is not None and ev.get("event_type") not in self.event_types:
             return False
+        category = self.logsource.get("category")
+        if category in CATEGORY_ACTIONS and ev.get("event_action") not in CATEGORY_ACTIONS[category]:
+            return False
+        if category == "process_creation" and ev.get("event_action") in NON_CREATION_ACTIONS:
+            return False
         product = self.logsource.get("product")
         if product in SOURCE_PRODUCTS and ev.get("source_type") != product:
+            return False
+        if product == PLATFORM_PRODUCT and ev.get("event_category") != PLATFORM_PRODUCT:
             return False
         if product in OS_PRODUCTS and ev.get("os") not in (None, product):
             return False

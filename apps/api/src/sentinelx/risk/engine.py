@@ -30,6 +30,16 @@ TACTIC_WEIGHTS: dict[str, float] = {
     "resource-development": 2,
 }
 
+# Kill-chain phases: an incident that spans several phases shows an intrusion progressing, which is
+# worth more than many alerts within one phase.
+KILL_CHAIN_PHASES: list[tuple[str, set[str]]] = [
+    ("get in", {"reconnaissance", "resource-development", "initial-access"}),
+    ("establish", {"execution", "persistence", "privilege-escalation", "stealth", "defense-impairment"}),
+    ("expand", {"credential-access", "discovery", "lateral-movement"}),
+    ("act", {"collection", "command-and-control", "exfiltration", "impact"}),
+]
+PROGRESSION_POINTS = {0: 0.0, 1: 0.0, 2: 4.0, 3: 7.0, 4: 10.0}
+
 CRITICALITY_POINTS = {1: 0.0, 2: 2.5, 3: 5.0, 4: 7.5, 5: 10.0}
 
 BANDS = [(25, "informational"), (50, "low"), (75, "medium"), (90, "high"), (100, "critical")]
@@ -188,6 +198,20 @@ def score_incident(i: RiskInputs) -> RiskResult:
             10,
             f"Most advanced tactic observed: {top}" if top else "No ATT&CK tactic mapped",
             i.tactics,
+        )
+    )
+
+    phases = [name for name, members in KILL_CHAIN_PHASES if members & set(i.tactics)]
+    c.append(
+        Contributor(
+            "attack_progression",
+            "Attack progression",
+            PROGRESSION_POINTS[len(phases)],
+            10,
+            f"Activity spans {len(phases)} of 4 intrusion phases ({', '.join(phases)})"
+            if len(phases) >= 2
+            else "Activity stays within a single intrusion phase",
+            phases,
         )
     )
 

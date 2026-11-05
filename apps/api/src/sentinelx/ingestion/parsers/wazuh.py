@@ -30,6 +30,97 @@ _AUTH_OK_GROUPS = {"authentication_success"}
 _ADMIN_GROUP_HINTS = ("admin", "sudo", "wheel", "domain admins", "enterprise admins")
 
 
+_SYSMON_REGISTRY = {"12": "registry_key_change", "13": "registry_set", "14": "registry_rename"}
+
+
+def _strip_realm(user: Any) -> Any:
+    if isinstance(user, str) and "@" in user:
+        return user.split("@", 1)[0]
+    return user
+
+
+def _windows_specific(event_id: str, sysmon: bool, ed: dict[str, Any], base: dict[str, Any]) -> bool:
+    """Windows/Sysmon events that need their own mapping. Returns True when ``base`` was filled in."""
+    meta = base["metadata"]
+    if event_id in ("4768", "4769") and not sysmon:
+        status = str(ed.get("status") or "0x0").lower()
+        base.update(
+            event_type="authentication",
+            event_action="kerberos_tgt" if event_id == "4768" else "kerberos_service_ticket",
+            outcome="success" if status in ("0x0", "0") else "failure",
+            username=_strip_realm(_first(ed.get("targetUserName"), base.get("username"))),
+            src_ip=(ed.get("ipAddress") or "").replace("::ffff:", "") or base.get("src_ip"),
+        )
+        meta.update(
+            service_name=ed.get("serviceName"),
+            ticket_encryption=ed.get("ticketEncryptionType"),
+            ticket_options=ed.get("ticketOptions"),
+            pre_auth_type=ed.get("preAuthType"),
+            logon_type="3",
+        )
+        return True
+    if event_id == "4662" and not sysmon:
+        base.update(event_type="other", event_action="directory_object_access", username=ed.get("subjectUserName"))
+        meta.update(properties=ed.get("properties"), access_mask=ed.get("accessMask"), object_type=ed.get("objectType"))
+        return True
+    if event_id == "7045" and not sysmon:
+        image = ed.get("imagePath")
+        base.update(event_type="other", event_action="service_installed", process_path=image)
+        base["process_name"] = basename(
+            image.split('"')[1] if isinstance(image, str) and image.startswith('"') else image
+        )
+        meta.update(service_name=ed.get("serviceName"), service_account=ed.get("accountName"))
+        return True
+    if event_id == "4698" and not sysmon:
+        base.update(event_type="other", event_action="scheduled_task_created", username=ed.get("subjectUserName"))
+        meta.update(task_name=ed.get("taskName"))
+        return True
+    if event_id == "4104" and not sysmon:
+        base.update(event_type="process", event_action="powershell_script", process_name="powershell.exe")
+        meta.update(script_block_id=ed.get("scriptBlockId"))
+        return True
+    if not sysmon:
+        return False
+    if event_id == "10":
+        src = ed.get("sourceImage")
+        base.update(event_type="process", event_action="process_access", process_path=src, process_name=basename(src))
+        meta.update(target_image=ed.get("targetImage"), granted_access=ed.get("grantedAccess"))
+        return True
+    if event_id == "8":
+        src = ed.get("sourceImage")
+        base.update(
+            event_type="process", event_action="create_remote_thread", process_path=src, process_name=basename(src)
+        )
+        meta.update(target_image=ed.get("targetImage"))
+        return True
+    if event_id == "11":
+        image = ed.get("image")
+        base.update(
+            event_type="file",
+            event_action="file_created",
+            file_path=ed.get("targetFilename"),
+            process_path=image,
+            process_name=basename(image),
+        )
+        return True
+    if event_id in _SYSMON_REGISTRY:
+        image = ed.get("image")
+        base.update(
+            event_type="registry",
+            event_action=_SYSMON_REGISTRY[event_id],
+            process_path=image,
+            process_name=basename(image),
+        )
+        meta.update(registry_key=ed.get("targetObject"), registry_value=ed.get("details"))
+        return True
+    if event_id == "7":
+        image = ed.get("image")
+        base.update(event_type="other", event_action="image_load", process_path=image, process_name=basename(image))
+        meta.update(image_loaded=ed.get("imageLoaded"))
+        return True
+    return False
+
+
 def _level_to_severity(level: int) -> int:
     # Wazuh levels 0..15 -> 0..100
     return max(0, min(100, round(level * 100 / 15)))
@@ -104,7 +195,10 @@ def parse(rec: dict[str, Any], tenant_id: uuid.UUID) -> CanonicalEvent:
         user = user.split("\\", 1)[1]
     base["username"] = user
 
-    if groups & _AUTH_FAIL_GROUPS or event_id_win == "4625":
+    sysmon = "sysmon" in str(sysd.get("channel") or "").lower() or "sysmon" in groups
+    if event_id_win and _windows_specific(event_id_win, sysmon, ed, base):
+        pass
+    elif groups & _AUTH_FAIL_GROUPS or event_id_win == "4625":
         base.update(event_type="authentication", event_action="logon", outcome="failure")
     elif groups & _AUTH_OK_GROUPS or event_id_win == "4624":
         base.update(event_type="authentication", event_action="logon", outcome="success")

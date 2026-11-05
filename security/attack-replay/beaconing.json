@@ -1,0 +1,32 @@
+{
+  "id": "beaconing",
+  "name": "Implant beaconing to its C2 every 60 seconds",
+  "techniques": [
+    "T1071",
+    "T1573"
+  ],
+  "source": "zeek",
+  "log_type": "conn",
+  "hunt": true,
+  "repeat": {
+    "count": 150,
+    "every_seconds": 60,
+    "start_offset": -9300,
+    "template": {
+      "uid": "Cbeacon{i}",
+      "id.orig_h": "10.20.30.17",
+      "id.orig_p": 50000,
+      "id.resp_h": "203.0.113.50",
+      "id.resp_p": 443,
+      "proto": "tcp",
+      "service": "ssl",
+      "conn_state": "SF",
+      "orig_bytes": 1830,
+      "resp_bytes": 412,
+      "duration": 0.31
+    }
+  },
+  "expect": [
+    "Possible Command-and-Control Beaconing"
+  ]
+}

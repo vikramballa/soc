@@ -20,6 +20,7 @@ from sentinelx.persistence.models import Indicator, ThreatIntelResult
 from sentinelx.threat_intel.providers import LocalIndicatorProvider, TIResult, configured_providers
 
 _HASH_RE = re.compile(r"^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$")
+_JA4_RE = re.compile(r"^[tqd]\d{2}[di]\d{4}[a-z0-9]{2}_[a-f0-9]{12}_[a-f0-9]{12}$", re.I)
 _DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$", re.I)
 
 
@@ -30,6 +31,8 @@ def classify_indicator(value: str) -> str | None:
         return "ip"
     except ValueError:
         pass
+    if _JA4_RE.match(v):
+        return "ja4"
     if _HASH_RE.match(v):
         return "hash"
     if v.lower().startswith(("http://", "https://")):
@@ -41,7 +44,7 @@ def classify_indicator(value: str) -> str | None:
 
 def normalize_indicator(itype: str, value: str) -> str:
     v = value.strip()
-    if itype in ("domain", "hash"):
+    if itype in ("domain", "hash", "ja3", "ja4"):
         return v.lower().rstrip(".")
     if itype == "ip":
         return str(ipaddress.ip_address(v))
@@ -155,7 +158,7 @@ def parse_feed(content: str, fmt: str, default_source: str, default_confidence: 
     for it in items:
         value = str(it.get("value", "")).strip()
         itype = (it.get("type") or classify_indicator(value) or "").lower()
-        if itype not in ("ip", "domain", "hash", "url"):
+        if itype not in ("ip", "domain", "hash", "url", "ja3", "ja4"):
             continue
         try:
             value = normalize_indicator(itype, value)

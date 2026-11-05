@@ -13,7 +13,7 @@ import { Pager } from './Incidents'
 
 type Tab = 'users' | 'settings' | 'tokens' | 'audit' | 'orgs'
 
-interface UserRow { id: string; email: string; display_name: string; role: string; auth_provider: string; is_active: boolean; last_login_at: string | null; created_at: string }
+interface UserRow { id: string; email: string; display_name: string; role: string; auth_provider: string; is_active: boolean; last_login_at: string | null; created_at: string; mfa_enabled_at: string | null }
 interface RoleInfo { role: string; description: string; permissions: string[] }
 
 const ROLE_LABEL: Record<string, string> = { SUPER_ADMIN: 'Super admin', TENANT_ADMIN: 'Admin', SECURITY_ANALYST: 'Security analyst', IT_OPERATOR: 'IT operator', VIEWER: 'Viewer' }
@@ -41,13 +41,18 @@ function UsersTab() {
     onSuccess: () => { toast('User updated'); qc.invalidateQueries({ queryKey: ['admin-users'] }) },
     onError: toastError,
   })
+  const resetMfa = useMutation({
+    mutationFn: (id: string) => api.post(`/admin/users/${id}/mfa-reset`),
+    onSuccess: () => { toast('Two-step verification reset. The user sets it up again at next sign-in.'); qc.invalidateQueries({ queryKey: ['admin-users'] }) },
+    onError: toastError,
+  })
   const genPw = () => setF({ ...f, password: Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 56]).join('') + '7a' })
   return (
     <Card className="overflow-hidden">
       <CardHeader title="Users" subtitle="People who can sign in to this organization" action={<Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setOpen(true)}>Add user</Button>} />
       {!users.data ? <SkeletonRows /> : (
         <table className="sx-table border-t border-line">
-          <thead><tr><th>User</th><th className="w-48">Role</th><th className="w-36">Last sign-in</th><th className="w-24">Active</th></tr></thead>
+          <thead><tr><th>User</th><th className="w-48">Role</th><th className="w-40">Two-step</th><th className="w-36">Last sign-in</th><th className="w-24">Active</th></tr></thead>
           <tbody>
             {users.data.map((u) => (
               <tr key={u.id}>
@@ -61,6 +66,18 @@ function UsersTab() {
                     <span className="text-[13px] text-muted" title={u.auth_provider !== 'local' ? 'Role comes from single sign-on' : u.id === me.user.id ? 'You cannot change your own role' : 'Only a super admin can manage this user'}>
                       {ROLE_LABEL[u.role] ?? u.role}{u.auth_provider !== 'local' && ' · SSO'}
                     </span>
+                  )}
+                </td>
+                <td>
+                  {u.auth_provider !== 'local' ? (
+                    <span className="text-[12.5px] text-faint">via SSO</span>
+                  ) : u.mfa_enabled_at ? (
+                    <span className="flex items-center gap-1.5">
+                      <Badge tone="ok"><ShieldCheck className="size-3" /> On</Badge>
+                      {canManage(u) && <Button size="sm" variant="ghost" onClick={() => resetMfa.mutate(u.id)}>Reset</Button>}
+                    </span>
+                  ) : (
+                    <Badge tone="warn">Off</Badge>
                   )}
                 </td>
                 <td className="text-muted">{relTime(u.last_login_at)}</td>
@@ -141,34 +158,73 @@ function SettingsTab() {
   )
 }
 
+interface IngestTokenRow {
+  id: string
+  name: string
+  prefix: string
+  created_at: string
+  last_used_at: string | null
+  last_used_ip: string | null
+  allowed_sources: string[]
+  allowed_cidrs: string[]
+  revoked: boolean
+}
+
+const TOKEN_SOURCES = ['wazuh', 'suricata', 'zeek', 'sentinelx', 'canarytokens']
+
 function TokensTab() {
   const qc = useQueryClient()
   const [name, setName] = useState('')
+  const [sources, setSources] = useState<string[]>([])
+  const [cidrs, setCidrs] = useState('')
   const [created, setCreated] = useState<string | null>(null)
-  const list = useQuery({ queryKey: ['tokens'], queryFn: () => api.get<{ id: string; name: string; prefix: string; created_at: string; last_used_at: string | null; revoked: boolean }[]>('/admin/ingest-tokens') })
+  const list = useQuery({ queryKey: ['tokens'], queryFn: () => api.get<IngestTokenRow[]>('/admin/ingest-tokens') })
   const create = useMutation({
-    mutationFn: () => api.post<{ token: string }>('/admin/ingest-tokens', { name }),
-    onSuccess: (r) => { setCreated(r.token); setName(''); qc.invalidateQueries({ queryKey: ['tokens'] }) },
+    mutationFn: () =>
+      api.post<{ token: string }>('/admin/ingest-tokens', {
+        name,
+        allowed_sources: sources,
+        allowed_cidrs: cidrs.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
+      }),
+    onSuccess: (r) => { setCreated(r.token); setName(''); setSources([]); setCidrs(''); qc.invalidateQueries({ queryKey: ['tokens'] }) },
     onError: toastError,
   })
-  const revoke = useMutation({ mutationFn: (id: string) => api.del(`/admin/ingest-tokens/${id}`), onSuccess: () => { toast('Token revoked'); qc.invalidateQueries({ queryKey: ['tokens'] }) } })
+  const revoke = useMutation({ mutationFn: (id: string) => api.del(`/admin/ingest-tokens/${id}`), onSuccess: () => { toast('Token revoked'); qc.invalidateQueries({ queryKey: ['tokens'] }) }, onError: toastError })
+  const toggle = (src: string) => setSources((cur) => (cur.includes(src) ? cur.filter((x) => x !== src) : [...cur, src]))
   return (
     <Card className="overflow-hidden">
-      <CardHeader title="Ingest tokens" subtitle="Let log shippers (Fluent Bit, Vector, scripts) send telemetry into this organization only." />
-      <div className="flex gap-2 border-y border-line bg-bg-elev px-4 py-2.5">
-        <Input className="max-w-xs" placeholder="Token name, e.g. fluent-bit-dmz" value={name} onChange={(e) => setName(e.target.value)} />
-        <Button variant="primary" icon={<Plus className="size-4" />} disabled={name.length < 2} loading={create.isPending} onClick={() => create.mutate()}>Create token</Button>
+      <CardHeader title="Ingest tokens" subtitle="Let log shippers (Fluent Bit, Vector, scripts) send telemetry into this organization only. Limit each token to the sources and networks it needs - a stolen token is then useless elsewhere." />
+      <div className="space-y-3 border-y border-line bg-bg-elev px-4 py-3">
+        <div className="flex flex-wrap gap-2">
+          <Input className="max-w-xs" placeholder="Token name, e.g. fluent-bit-dmz" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input className="max-w-sm" placeholder="Allowed networks, e.g. 10.20.0.0/16 (empty = any)" value={cidrs} onChange={(e) => setCidrs(e.target.value)} />
+          <Button variant="primary" icon={<Plus className="size-4" />} disabled={name.length < 2} loading={create.isPending} onClick={() => create.mutate()}>Create token</Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted">
+          <span className="mr-1">Allowed sources:</span>
+          {TOKEN_SOURCES.map((src) => (
+            <button key={src} type="button" onClick={() => toggle(src)} aria-pressed={sources.includes(src)}
+              className={`press h-6 rounded-md border px-2 ${sources.includes(src) ? 'border-accent/60 bg-accent-soft text-fg' : 'border-line text-muted hover:text-fg'}`}>
+              {sources.includes(src) ? '✓ ' : ''}{src}
+            </button>
+          ))}
+          {!sources.length && <span className="text-warn">any source (not recommended)</span>}
+        </div>
       </div>
       {!list.data ? <SkeletonRows /> : !list.data.length ? <EmptyState icon={<KeyRound className="size-5" />} title="No tokens yet" /> : (
         <table className="sx-table">
-          <thead><tr><th>Name</th><th className="w-32">Prefix</th><th className="w-36">Created</th><th className="w-36">Last used</th><th className="w-28" /></tr></thead>
+          <thead><tr><th>Name</th><th>Scope</th><th className="w-32">Prefix</th><th className="w-36">Last used</th><th className="w-28" /></tr></thead>
           <tbody>
             {list.data.map((t) => (
               <tr key={t.id}>
                 <td className="font-medium">{t.name} {t.revoked && <Badge>revoked</Badge>}</td>
+                <td className="text-[12.5px] text-muted">
+                  {t.allowed_sources.length ? t.allowed_sources.join(', ') : <span className="text-warn">any source</span>}
+                  {' · '}
+                  {t.allowed_cidrs.length ? t.allowed_cidrs.join(', ') : <span className="text-warn">any network</span>}
+                </td>
                 <td><Mono className="text-muted">{t.prefix}…</Mono></td>
-                <td className="text-muted">{dateTime(t.created_at)}</td>
-                <td className="text-muted">{relTime(t.last_used_at)}</td>
+                <td className="text-muted">{relTime(t.last_used_at)}{t.last_used_ip && <span className="block text-[11.5px] text-faint">{t.last_used_ip}</span>}</td>
                 <td className="text-right">{!t.revoked && <Button size="sm" variant="danger" onClick={() => revoke.mutate(t.id)}>Revoke</Button>}</td>
               </tr>
             ))}
@@ -186,6 +242,25 @@ function TokensTab() {
   )
 }
 
+interface ChainReport { ok: boolean; rows_checked: number; head_seq: number; head_hash: string; problems: { seq: number | null; kind: string; detail: string }[]; checked_at: string }
+
+function ChainStatus() {
+  const q = useQuery({ queryKey: ['audit-chain'], queryFn: () => api.get<ChainReport>('/admin/audit-chain'), staleTime: 60_000 })
+  if (!q.data) return null
+  const r = q.data
+  return (
+    <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line px-4 py-2.5 text-[12.5px] ${r.ok ? 'text-muted' : 'bg-danger/8 text-danger'}`}>
+      <Badge tone={r.ok ? 'ok' : 'danger'}>{r.ok ? '✓ Integrity verified' : '✗ Integrity check failed'}</Badge>
+      <span>{r.rows_checked.toLocaleString()} records hash-chained</span>
+      <span className="text-faint" title="Record this value outside SentinelX (a ticket or write-once storage). A later check with a different history reveals a rewrite.">
+        head #{r.head_seq} <Mono>{r.head_hash.slice(0, 16)}…</Mono>
+      </span>
+      <Button size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={() => { navigator.clipboard?.writeText(`${r.head_seq} ${r.head_hash}`); toast('Head hash copied') }}>Copy head</Button>
+      {r.problems.map((p, i) => <div key={i} className="basis-full">seq {p.seq ?? '-'}: {p.detail}</div>)}
+    </div>
+  )
+}
+
 function AuditTab() {
   const { can } = useAuth()
   const [action, setAction] = useState('')
@@ -194,14 +269,15 @@ function AuditTab() {
   const q = useQuery({ queryKey: ['audit', action, offset, scope], queryFn: () => api.get<Page<{ id: string; actor: string; action: string; resource_type: string; resource_id: string | null; result: string; details: Record<string, unknown>; source_ip: string | null; created_at: string }>>('/admin/audit-logs', { action, offset, limit: 100, scope }) })
   return (
     <Card className="overflow-hidden">
-      <CardHeader title="Audit log" subtitle="Append-only record of sign-ins, changes, AI requests and reports. Entries cannot be edited or deleted." icon={<ShieldCheck className="size-4" />} />
+      <CardHeader title="Audit log" subtitle="Append-only, hash-chained record of sign-ins, changes, AI requests and reports. Entries cannot be edited or deleted without the chain check noticing." icon={<ShieldCheck className="size-4" />} />
+      {can('platform:manage') && <ChainStatus />}
       <div className="flex flex-wrap items-center gap-2 border-y border-line bg-bg-elev px-4 py-2.5">
         {can('platform:manage') && (
           <Segmented value={scope} onChange={(v) => { setScope(v); setOffset(0) }} items={[{ value: 'organization', label: 'This organization' }, { value: 'platform', label: 'Platform (no organization)' }]} />
         )}
         <Select className="max-w-xs" value={action} onChange={(e) => { setAction(e.target.value); setOffset(0) }}>
           <option value="">All actions</option>
-          {['auth', 'incident', 'response', 'ai', 'rule', 'user', 'tenant', 'threatintel', 'report', 'ingest_token', 'authorization'].map((a) => <option key={a} value={a}>{a}</option>)}
+          {['auth', 'incident', 'response', 'ai', 'rule', 'user', 'tenant', 'threatintel', 'report', 'ingest_token', 'honeytoken', 'telemetry', 'authorization'].map((a) => <option key={a} value={a}>{a}</option>)}
         </Select>
       </div>
       {!q.data ? <SkeletonRows /> : (

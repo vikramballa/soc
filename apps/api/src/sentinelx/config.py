@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     log_json: bool = True
 
     database_url: str = "postgresql+asyncpg://sentinelx@127.0.0.1:5432/sentinelx"
+    # Schema owner used only for migrations (ADR-013). When set, the runtime role in DATABASE_URL owns
+    # nothing, so a compromised app process cannot disable the audit trigger or row-level security.
+    database_owner_url: str | None = None
     database_pool_size: int = 10
 
     # Auth
@@ -44,6 +47,11 @@ class Settings(BaseSettings):
     oidc_tenant_claim: str = "tenant"
     oidc_role_claim_prefix: str = "sentinelx:"
     oidc_allow_super_admin: bool = False
+    # Two-step verification (TOTP). None = required for admins in production only.
+    mfa_required_for_admins: bool | None = None
+    mfa_issuer: str = "SentinelX"
+    # Sensitive changes (roles, rules, tokens, MFA) need a password re-check this recent.
+    reauth_window_minutes: int = 15
 
     # Workers / pipeline
     embedded_worker: bool = False
@@ -59,6 +67,21 @@ class Settings(BaseSettings):
     incident_promote_risk: int = 50
     incident_promote_severity: int = 70
     ml_alone_can_promote: bool = False
+
+    # Hunting analytics (beaconing, DNS tunnelling, telemetry silence, alert storms, rarity)
+    hunt_interval_minutes: int = 10
+    beacon_min_connections: int = 20
+    beacon_score_threshold: float = 0.8
+    beacon_lookback_hours: int = 24
+    dns_tunnel_min_unique_subdomains: int = 40
+    silence_min_minutes: int = 30
+    silence_gap_multiplier: float = 6.0
+    silence_min_events: int = 20
+    # a sender is only watched once it has been sending this long (a one-off bulk import never "goes quiet")
+    silence_min_history_hours: float = 2.0
+    alert_storm_min_alerts: int = 200
+    alert_storm_factor: float = 10.0
+    rarity_min_baseline_days: float = 7.0
 
     # Retention
     event_retention_days: int = 30
@@ -114,6 +137,14 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def mfa_enforced_for_admins(self) -> bool:
+        return self.is_production if self.mfa_required_for_admins is None else self.mfa_required_for_admins
+
+    @property
+    def migration_url(self) -> str:
+        return self.database_owner_url or self.database_url
 
     def validate_for_production(self) -> list[str]:
         problems: list[str] = []

@@ -1,0 +1,150 @@
+title: Certutil Used to Download or Decode a File
+id: 274f0e90-4dd8-4f39-a7ce-d702d3fb95ae
+status: stable
+description: certutil.exe fetched a URL or decoded a base64 file. Attackers use this signed Windows tool to bring in payloads past application allow-lists.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\certutil.exe'
+    CommandLine|contains:
+      - 'urlcache'
+      - 'verifyctl'
+      - '-decode'
+      - '/decode'
+  condition: selection
+falsepositives:
+  - Rare administrative certificate tasks
+level: high
+tags:
+  - attack.command_and_control
+  - attack.t1105
+  - attack.stealth
+  - attack.t1140
+---
+title: Signed Windows Binary Running Remote or Inline Script
+id: 8cbf08f2-3dfe-4bc5-b550-c8c5a7a77d58
+status: stable
+description: mshta, rundll32 or regsvr32 was told to run script from a URL or inline JavaScript - proxy execution through trusted Windows binaries.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_mshta:
+    Image|endswith: '\mshta.exe'
+    CommandLine|contains:
+      - 'http://'
+      - 'https://'
+      - 'javascript:'
+      - 'vbscript:'
+  selection_rundll32:
+    Image|endswith: '\rundll32.exe'
+    CommandLine|contains:
+      - 'javascript:'
+      - 'RunHTMLApplication'
+      - 'http://'
+      - 'https://'
+  selection_regsvr32:
+    Image|endswith: '\regsvr32.exe'
+    CommandLine|contains:
+      - 'scrobj.dll'
+      - '/i:http'
+      - '-i:http'
+  condition: 1 of selection_*
+falsepositives:
+  - Very old intranet applications
+level: high
+tags:
+  - attack.stealth
+  - attack.t1218.005
+  - attack.t1218.011
+  - attack.t1218.010
+---
+title: BITS Job Used to Download a File
+id: 764e8352-ab45-49bc-86e9-3d410695d3f7
+status: stable
+description: bitsadmin or Start-BitsTransfer downloaded a file. BITS transfers survive reboots and are a known stealthy download channel.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    CommandLine|contains:
+      - 'bitsadmin /transfer'
+      - 'bitsadmin.exe /transfer'
+      - '/addfile'
+      - 'Start-BitsTransfer'
+  condition: selection
+falsepositives:
+  - Some software updaters
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1197
+  - attack.command_and_control
+  - attack.t1105
+---
+title: Reverse Shell Command Line
+id: 5399d4c7-230a-47ef-ba9a-cb3b5d3520f6
+status: stable
+description: The command line matches common reverse-shell one-liners (bash /dev/tcp, netcat -e, python pty spawn, socat exec). These give a remote operator an interactive shell.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains:
+      - '/dev/tcp/'
+      - '/dev/udp/'
+      - 'nc -e '
+      - 'ncat -e '
+      - 'nc.traditional -e'
+      - 'pty.spawn('
+      - 'socat exec:'
+      - 'socat tcp-connect'
+      - 'mkfifo /tmp/'
+  condition: selection
+falsepositives:
+  - Penetration tests
+level: critical
+tags:
+  - attack.execution
+  - attack.t1059.004
+  - attack.command_and_control
+---
+title: PowerShell Download Cradle
+id: a2b47f18-d84a-4b61-8750-2573c894f33c
+status: stable
+description: PowerShell downloaded and ran code in memory (IEX with WebClient / Invoke-WebRequest / DownloadString).
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection_dl:
+    CommandLine|contains:
+      - 'DownloadString('
+      - 'DownloadData('
+      - 'Invoke-WebRequest'
+      - 'Net.WebClient'
+  selection_exec:
+    CommandLine|contains:
+      - 'IEX'
+      - 'Invoke-Expression'
+  condition: all of selection_*
+falsepositives:
+  - Install scripts (e.g. Chocolatey bootstrap)
+level: high
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.command_and_control
+  - attack.t1105

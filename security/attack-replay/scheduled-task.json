@@ -1,0 +1,48 @@
+{
+  "id": "scheduled-task",
+  "name": "Scheduled task persistence via schtasks",
+  "techniques": [
+    "T1053.005"
+  ],
+  "source": "wazuh",
+  "events": [
+    {
+      "@offset": -120,
+      "rule": {
+        "id": "61603",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "sysmon"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "WS-FIN-07",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "1",
+            "channel": "Microsoft-Windows-Sysmon/Operational",
+            "computer": "WS-FIN-07"
+          },
+          "eventdata": {
+            "image": "C:\\Windows\\System32\\schtasks.exe",
+            "commandLine": "schtasks.exe /create /sc minute /mo 30 /tn Updater /tr C:\\Users\\Public\\upd.exe",
+            "parentImage": "C:\\Windows\\System32\\cmd.exe",
+            "user": "CORP\\jdoe"
+          }
+        }
+      },
+      "location": "EventChannel"
+    }
+  ],
+  "expect": [
+    "Scheduled Task Created From the Command Line"
+  ],
+  "log_type": null,
+  "hunt": false
+}

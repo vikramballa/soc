@@ -41,6 +41,22 @@ SECURITY_HEADERS = {
 }
 
 
+async def _sync_rules_on_start() -> None:
+    """Register rule files added by an upgrade. Without this a new rule compiles but stays inactive
+    (rules are enabled from the database catalogue) until someone remembers ``sentinelx sync-rules``."""
+    from sqlalchemy import func, select
+
+    from sentinelx.detection.engine import sync_rules_to_db
+
+    try:
+        async with system_session() as db:
+            await db.execute(select(func.pg_advisory_xact_lock(func.hashtext("sentinelx_rule_sync"))))
+            result = await sync_rules_to_db(db, actor="startup")
+        log.info("rules_synced", **result)
+    except Exception as e:  # never block startup on this; detection keeps the previous catalogue
+        log.warning("rule_sync_failed", error=str(e))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     s = get_settings()
@@ -48,6 +64,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     problems = s.validate_for_production()
     if problems:
         raise RuntimeError("Refusing to start in production: " + "; ".join(problems))
+    await _sync_rules_on_start()
+    if s.is_production and not s.database_owner_url:
+        log.warning(
+            "single_database_role",
+            hint="the runtime role owns the schema; set DATABASE_OWNER_URL (scripts/harden-db.sh, ADR-013)",
+        )
     worker_task = None
     worker = None
     if s.embedded_worker:
@@ -155,16 +177,36 @@ def create_app() -> FastAPI:
         analytics,
         assets,
         auth,
+        deception,
         detections,
         events,
         incidents,
         ingest,
+        mfa,
         mitre,
+        telemetry,
         threat_intel,
     )
 
-    for r in (auth, incidents, alerts, events, assets, detections, mitre, threat_intel, analytics, ai, admin, ingest):
+    for r in (
+        auth,
+        mfa,
+        incidents,
+        alerts,
+        events,
+        assets,
+        detections,
+        mitre,
+        threat_intel,
+        analytics,
+        ai,
+        admin,
+        ingest,
+        deception,
+        telemetry,
+    ):
         app.include_router(r.router, prefix="/api/v1")
+    app.include_router(mfa.admin_router, prefix="/api/v1")
 
     async def _db_ok() -> bool:
         try:

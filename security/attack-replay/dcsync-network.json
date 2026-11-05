@@ -1,0 +1,26 @@
+{
+  "id": "dcsync-network",
+  "name": "DCSync replication call seen by Zeek",
+  "techniques": [
+    "T1003.006"
+  ],
+  "source": "zeek",
+  "log_type": "dce_rpc",
+  "events": [
+    {
+      "@offset": -60,
+      "uid": "CdcSync1",
+      "id.orig_h": "10.20.30.17",
+      "id.orig_p": 50122,
+      "id.resp_h": "10.20.30.2",
+      "id.resp_p": 135,
+      "endpoint": "drsuapi",
+      "operation": "DRSGetNCChanges",
+      "named_pipe": "135"
+    }
+  ],
+  "expect": [
+    "DCSync Seen on the Network (DRSGetNCChanges)"
+  ],
+  "hunt": false
+}

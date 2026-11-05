@@ -1,0 +1,88 @@
+title: Cloud Sync Tool Used for Bulk Upload
+id: 6b36e14e-b4a0-428c-8423-a5753c7d3d44
+status: stable
+description: rclone, MEGAcmd or similar was run with a copy or sync command. Ransomware crews use these tools to steal data before encrypting it.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection_tool:
+    - Image|endswith:
+        - '\rclone.exe'
+        - '/rclone'
+        - '\megacmd.exe'
+        - '\MEGAclient.exe'
+    - CommandLine|contains:
+        - 'rclone copy'
+        - 'rclone sync'
+        - 'mega-put'
+  selection_verb:
+    CommandLine|contains:
+      - 'copy'
+      - 'sync'
+      - 'put'
+      - 'move'
+  condition: all of selection_*
+falsepositives:
+  - Sanctioned backups with rclone
+level: high
+tags:
+  - attack.exfiltration
+  - attack.t1567.002
+---
+title: Tunnelling Tool Started
+id: 877d308d-14d1-4d99-a661-d5dcf84d8627
+status: stable
+description: A tunnelling or reverse-proxy tool started (ngrok, cloudflared tunnel, chisel, frp, plink -R). These expose internal hosts to an outside operator.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains:
+      - 'ngrok tcp'
+      - 'ngrok http'
+      - 'cloudflared tunnel'
+      - 'chisel client'
+      - 'chisel server'
+      - 'frpc -c'
+      - 'plink.exe -R'
+      - 'ssh -R '
+  condition: selection
+falsepositives:
+  - Developers sharing local services
+level: high
+tags:
+  - attack.command_and_control
+  - attack.t1572
+---
+title: File Uploaded With Curl or Wget
+id: 94a78ad3-9835-49b3-9202-4ec1586af57f
+status: stable
+description: curl or wget sent a local file to a remote server (--upload-file, -T, --data-binary @, --post-file).
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection_tool:
+    Image|endswith:
+      - '/curl'
+      - '\curl.exe'
+      - '/wget'
+  selection_upload:
+    CommandLine|contains:
+      - '--upload-file'
+      - ' -T '
+      - '--data-binary @'
+      - '-F file=@'
+      - '--post-file'
+  condition: all of selection_*
+falsepositives:
+  - Scripts that publish build artefacts
+level: medium
+tags:
+  - attack.exfiltration
+  - attack.t1048

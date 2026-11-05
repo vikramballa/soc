@@ -1,0 +1,287 @@
+title: SentinelX Detection Rule Disabled
+id: 347b51e7-83a3-404b-95ed-50e36a16c435
+name: sx_platform_rule_disabled
+status: stable
+description: Someone switched off a detection rule for this organization. Intruders who reach the SOC console disable the rules that would catch them. Confirm the change was planned tuning.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: rule.disable
+  condition: selection
+falsepositives:
+  - Planned tuning of a noisy rule (record the reason in the change ticket)
+level: medium
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: Several SentinelX Detection Rules Disabled Quickly
+id: a7dc3e69-52c0-4ad3-adec-4672d2f89ecb
+status: stable
+description: Three or more detection rules were switched off by the same account within 15 minutes - consistent with someone blinding the SOC before acting.
+author: SentinelX
+date: 2026-11-05
+correlation:
+  type: event_count
+  rules:
+    - sx_platform_rule_disabled
+  group-by:
+    - username
+  timespan: 15m
+  condition:
+    gte: 3
+  generate: true
+falsepositives:
+  - Bulk tuning after onboarding a new log source
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: SentinelX Custom Detection Rule Deleted or Changed
+id: 00d8f45c-2c93-4dd6-b07c-538ed3c6cc81
+status: stable
+description: A custom detection rule was deleted or rewritten. Weakening a rule is a quiet way to stop it from firing.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action:
+      - rule.delete
+      - rule.update
+  condition: selection
+falsepositives:
+  - Normal detection engineering (check the rule history)
+level: low
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: SentinelX Two-Step Verification Removed
+id: 54187a5d-6fb0-4ce1-aeb7-2d5ac932d6c0
+status: stable
+description: Two-step verification was turned off for a SentinelX account or reset by an administrator. Account takeover often starts by removing the second factor.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action:
+      - auth.mfa_disabled
+      - user.mfa_reset
+  condition: selection
+falsepositives:
+  - A user replaced a lost phone
+level: medium
+tags:
+  - attack.persistence
+  - attack.t1556
+---
+title: SentinelX Wrong Second Factor After Correct Password
+id: ae913ec1-488c-4ef7-ae19-3527e6bcc9cd
+name: sx_platform_mfa_failure
+status: stable
+description: The right password for a SentinelX account was entered, followed by a wrong two-step verification code. Someone else may know this password.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: auth.mfa
+    outcome: failure
+  condition: selection
+falsepositives:
+  - Typing the code after it expired
+level: medium
+tags:
+  - attack.credential_access
+  - attack.t1621
+---
+title: SentinelX Administrator Role Granted
+id: 8a2a7e42-1db7-49eb-8e65-6558aee9758f
+status: stable
+description: A SentinelX account was created with, or changed to, an administrator role. New administrators are a common persistence step for an intruder in the console.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action:
+      - user.create
+      - user.update
+    role:
+      - TENANT_ADMIN
+      - SUPER_ADMIN
+  condition: selection
+falsepositives:
+  - Onboarding a new SOC administrator
+level: high
+tags:
+  - attack.persistence
+  - attack.t1098
+---
+title: SentinelX Ingest Token Used Outside Its Scope
+id: c809e850-74b2-4d24-9d85-5533efdc2ce4
+status: stable
+description: An ingest token was presented for a source or from a network it is not allowed for. A stolen shipper token is being used, possibly to inject fake telemetry.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: ingest_token.denied
+  condition: selection
+falsepositives:
+  - A shipper was moved to a new subnet without updating the token
+level: high
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: SentinelX Ingest Token Used From a New Address
+id: 6dfa577f-f16d-4715-bd2f-0b222db94eb6
+status: stable
+description: An ingest token that normally sends from known addresses was used from a new one. Forged telemetry can hide or fake activity.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: ingest_token.new_address
+  condition: selection
+falsepositives:
+  - Shipper restarted with a new DHCP address
+level: medium
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: SentinelX Unrestricted Ingest Token Created
+id: ff80e5ae-ee17-4062-8e03-8bdb1772440c
+status: stable
+description: An ingest token was created without a source or network restriction. Anyone who obtains it can send telemetry of any kind from anywhere.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: ingest_token.create
+    unrestricted: true
+  condition: selection
+falsepositives:
+  - Lab setups
+level: low
+tags:
+  - attack.defense_impairment
+---
+title: SentinelX Audit Trail Integrity Failure
+id: b2e54209-8108-416a-9182-e83931023720
+status: stable
+description: The tamper-evident audit trail failed its hash-chain check. Audit records were edited, removed or forged by someone with database access.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: audit.chain_broken
+  condition: selection
+falsepositives:
+  - None expected
+level: critical
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: SentinelX Retention or Correlation Exclusions Changed
+id: dfc9d0a9-897b-4bdd-aab2-b0ee3499d2db
+status: stable
+description: Event retention or the list of entities excluded from correlation was changed. Shorter retention destroys evidence; exclusions can hide an attacker's hosts.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: tenant.settings
+    changed:
+      - event_retention_days
+      - correlation_ignore
+  condition: selection
+falsepositives:
+  - Planned storage or tuning change
+level: medium
+tags:
+  - attack.stealth
+  - attack.t1070
+---
+title: SentinelX Password Confirmation Failed In a Signed-In Session
+id: e94a7819-7ee0-4f50-8edf-bc7d0550803f
+status: stable
+description: Inside an existing session, someone failed to confirm the account password before a sensitive change. A hijacked session cookie looks like this.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: auth.reauth
+    outcome: failure
+  condition: selection
+falsepositives:
+  - User mistyped their password
+level: medium
+tags:
+  - attack.credential_access
+  - attack.t1078
+---
+title: SentinelX Decoy Removed or Switched Off
+id: 5c822f90-b368-42af-a6b6-337386a992c9
+status: stable
+description: A honeytoken was deleted or disabled. Removing tripwires is a way to move around unnoticed.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action: honeytoken.disable
+  condition: selection
+falsepositives:
+  - Rotating decoys
+level: medium
+tags:
+  - attack.defense_impairment
+  - attack.t1685
+---
+title: SentinelX Telemetry Sender Muted or Removed
+id: 1d37fee6-51b0-4b18-a106-f2753d042bb9
+status: stable
+description: Silence alerts for an agent or sensor were muted, or the sender was removed from monitoring. Check it matches planned maintenance - an intruder mutes the alarm before stopping the agent.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: sentinelx_platform
+detection:
+  selection:
+    event_action:
+      - telemetry.mute
+      - telemetry.forget
+  condition: selection
+falsepositives:
+  - Planned maintenance or decommissioning
+level: low
+tags:
+  - attack.defense_impairment
+  - attack.t1685

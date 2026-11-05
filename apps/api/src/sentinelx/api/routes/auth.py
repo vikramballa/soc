@@ -21,6 +21,7 @@ from sentinelx.security import oidc
 from sentinelx.security.passwords import hash_password, new_token, password_problems, token_hash, verify_password
 from sentinelx.security.ratelimit import limiter
 from sentinelx.security.rbac import ROLE_DESCRIPTIONS, Perm, Role
+from sentinelx.services import selfmon
 from sentinelx.services.audit import audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -49,9 +50,10 @@ def _set_cookie(response: Response, token: str) -> None:
     )
 
 
-async def create_session(user_id: uuid.UUID, tenant_id: uuid.UUID, request: Request) -> str:
+async def create_session(user_id: uuid.UUID, tenant_id: uuid.UUID, request: Request, mfa_pending: bool = False) -> str:
     s = get_settings()
     token = new_token()
+    now = datetime.now(UTC)
     async with system_session() as db:
         db.add(
             DbSession(
@@ -59,16 +61,18 @@ async def create_session(user_id: uuid.UUID, tenant_id: uuid.UUID, request: Requ
                 tenant_id=tenant_id,
                 user_id=user_id,
                 token_hash=token_hash(token),
-                expires_at=datetime.now(UTC) + timedelta(minutes=s.session_ttl_minutes),
+                # a half-signed-in session (second factor outstanding) lives only a few minutes
+                expires_at=now + (timedelta(minutes=5) if mfa_pending else timedelta(minutes=s.session_ttl_minutes)),
                 ip=client_ip(request),
                 user_agent=(request.headers.get("user-agent") or "")[:300],
+                mfa_pending=mfa_pending,
+                reauth_at=None if mfa_pending else now,
             )
         )
-        await db.execute(
-            update(User)
-            .where(User.id == user_id)
-            .values(last_login_at=datetime.now(UTC), failed_logins=0, locked_until=None)
-        )
+        if not mfa_pending:
+            await db.execute(
+                update(User).where(User.id == user_id).values(last_login_at=now, failed_logins=0, locked_until=None)
+            )
     return token
 
 
@@ -100,6 +104,7 @@ async def login(body: LoginIn, request: Request, response: Response) -> dict[str
         )
     now = datetime.now(UTC)
     failure: str | None = None
+    mfa_required = False
     async with system_session() as db:  # commit the failure counter + audit even when sign-in fails
         user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
         locked = user is not None and user.locked_until is not None and user.locked_until > now
@@ -121,7 +126,19 @@ async def login(body: LoginIn, request: Request, response: Response) -> dict[str
                 details={"reason": failure},
                 source_ip=ip,
             )
+            if user is not None:
+                await selfmon.emit(
+                    db,
+                    user.tenant_id,
+                    "auth.login",
+                    f"Failed sign-in to SentinelX for {email}" + (" (account locked)" if locked else ""),
+                    actor=email,
+                    src_ip=ip,
+                    outcome="failure",
+                    details={"reason": failure, "locked": bool(user.locked_until and user.locked_until > now)},
+                )
         else:
+            mfa_required = user.mfa_enabled_at is not None
             await audit(
                 db,
                 action="auth.login",
@@ -130,8 +147,13 @@ async def login(body: LoginIn, request: Request, response: Response) -> dict[str
                 actor=email,
                 actor_id=user.id,
                 tenant_id=user.tenant_id,
+                details={"mfa": "pending"} if mfa_required else {},
                 source_ip=ip,
             )
+            if not mfa_required:
+                await selfmon.emit(
+                    db, user.tenant_id, "auth.login", f"Signed in to SentinelX: {email}", actor=email, src_ip=ip
+                )
             user_id, tenant_id = user.id, user.tenant_id
     if failure:
         # identical message for unknown user / wrong password (no account enumeration)
@@ -141,30 +163,39 @@ async def login(body: LoginIn, request: Request, response: Response) -> dict[str
             if failure == "locked"
             else "Email or password is incorrect",
         )
-    token = await create_session(user_id, tenant_id, request)
+    token = await create_session(user_id, tenant_id, request, mfa_pending=mfa_required)
     _set_cookie(response, token)
+    if mfa_required:
+        return {"ok": False, "mfa_required": True}
     return {"ok": True}
 
 
 @router.post("/logout")
-async def logout(request: Request, response: Response, principal: Principal = Depends(get_principal)) -> dict[str, Any]:
+async def logout(request: Request, response: Response) -> dict[str, Any]:
+    """Works for half-signed-in sessions too (cancel at the two-step verification prompt)."""
     s = get_settings()
     token = request.cookies.get(s.session_cookie_name)
+    principal: Principal | None = None
+    try:
+        principal = await get_principal(request)
+    except HTTPException:
+        principal = None
     async with system_session() as db:
         if token:
             await db.execute(
                 update(DbSession).where(DbSession.token_hash == token_hash(token)).values(revoked_at=datetime.now(UTC))
             )
-        await audit(
-            db,
-            action="auth.logout",
-            resource_type="user",
-            resource_id=principal.user_id,
-            actor=principal.email,
-            actor_id=principal.user_id,
-            tenant_id=principal.home_tenant_id,
-            source_ip=client_ip(request),
-        )
+        if principal is not None:
+            await audit(
+                db,
+                action="auth.logout",
+                resource_type="user",
+                resource_id=principal.user_id,
+                actor=principal.email,
+                actor_id=principal.user_id,
+                tenant_id=principal.home_tenant_id,
+                source_ip=client_ip(request),
+            )
     response.delete_cookie(s.session_cookie_name, path="/")
     return {"ok": True}
 
@@ -194,7 +225,10 @@ async def me(principal: Principal = Depends(get_principal)) -> dict[str, Any]:
             "role": principal.role,
             "role_description": ROLE_DESCRIPTIONS.get(Role(principal.role), ""),
             "auth_provider": user.auth_provider if user else "local",
+            "mfa_enabled": principal.mfa_enabled,
+            "mfa_enrollment_required": principal.mfa_enrollment_required,
         },
+        "reauth_valid": principal.recently_authenticated(),
         "permissions": sorted(str(p) for p in principal.permissions),
         "tenant": {
             "id": str(tenant.id),

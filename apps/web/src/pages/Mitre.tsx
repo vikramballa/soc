@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ExternalLink } from 'lucide-react'
+import { BadgeCheck, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Drawer } from '../components/overlay'
@@ -18,12 +18,14 @@ interface Tech {
   evidence: number
   last_observed: string | null
   covered: boolean
+  tested: boolean
   observed_subtechniques: string[]
 }
 interface Matrix {
   attack_version: string
   observed_total: number
   covered_total: number
+  tested_total: number
   tactics: { id: string; shortname: string; name: string; techniques: Tech[] }[]
 }
 interface TechDetail {
@@ -58,6 +60,9 @@ export default function Mitre() {
             <span className="flex items-center gap-1.5"><span className="size-3 rounded bg-high/80" /> Observed in incidents ({q.data.observed_total})</span>
             <span className="flex items-center gap-1.5"><span className="size-3 rounded border border-accent/60 bg-accent-soft" /> Covered by an enabled rule ({q.data.covered_total})</span>
             <span className="flex items-center gap-1.5"><span className="size-3 rounded border border-line bg-surface-2" /> Not covered</span>
+            <span className="flex items-center gap-1.5" title="A synthetic attack for this technique is replayed through the real pipeline in every test run and must be detected">
+              <BadgeCheck className="size-3.5 text-ok" /> Proven by an attack replay test ({q.data.tested_total})
+            </span>
             <span className="ml-auto text-faint">ATT&CK v{q.data.attack_version}</span>
           </div>
           <Card className="overflow-x-auto p-3">
@@ -84,7 +89,10 @@ export default function Mitre() {
                               : 'border-line bg-bg-elev text-faint hover:text-muted',
                           )}
                         >
-                          <span className="block truncate">{t.name}</span>
+                          <span className="flex items-center gap-1">
+                            <span className="block min-w-0 flex-1 truncate">{t.name}</span>
+                            {t.tested && <BadgeCheck aria-label="Proven by an attack replay test" className="size-3 shrink-0 text-ok" />}
+                          </span>
                           <span className="flex items-center justify-between font-mono text-[10.5px] opacity-70">
                             {t.id}
                             {t.observed && <span className="tnum font-sans">{t.incidents} inc</span>}

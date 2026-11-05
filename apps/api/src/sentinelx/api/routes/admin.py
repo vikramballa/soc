@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import uuid
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentinelx.api.deps import Principal, client_ip, get_db, require
+from sentinelx.api.deps import Principal, client_ip, get_db, require, require_fresh
 from sentinelx.api.routes.analytics import ai_status, worker_status
 from sentinelx.api.schemas import AuditOut, Page, UserIn, UserOut, UserPatch
 from sentinelx.config import get_settings
@@ -29,6 +30,7 @@ from sentinelx.persistence.models import (
 from sentinelx.security.oidc import oidc_enabled
 from sentinelx.security.passwords import hash_password, new_token, password_problems, token_hash
 from sentinelx.security.rbac import ROLE_DESCRIPTIONS, ROLE_PERMISSIONS, Perm, can_assign, can_manage
+from sentinelx.services import selfmon
 from sentinelx.services.audit import audit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -43,6 +45,9 @@ class TenantSettingsIn(BaseModel):
 
 class TokenIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
+    # empty = any source / any address (kept for compatibility); scoping is strongly recommended
+    allowed_sources: list[str] = Field(default_factory=list, max_length=8)
+    allowed_cidrs: list[str] = Field(default_factory=list, max_length=50)
 
 
 class TenantIn(BaseModel):
@@ -74,7 +79,7 @@ async def list_users(
 async def create_user(
     body: UserIn,
     request: Request,
-    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.ADMIN_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserOut:
     if not can_assign(principal.role, body.role):
@@ -107,6 +112,15 @@ async def create_user(
         details={"email": email, "role": body.role},
         source_ip=client_ip(request),
     )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "user.create",
+        f"{principal.email} created SentinelX user {email} with role {body.role}",
+        actor=principal.email,
+        src_ip=client_ip(request),
+        details={"target_user": email, "role": body.role},
+    )
     return UserOut.model_validate(user)
 
 
@@ -115,7 +129,7 @@ async def update_user(
     user_id: uuid.UUID,
     body: UserPatch,
     request: Request,
-    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.ADMIN_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> UserOut:
     user = await db.get(User, user_id)
@@ -149,6 +163,15 @@ async def update_user(
         details=changes,
         source_ip=client_ip(request),
     )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "user.update",
+        f"{principal.email} changed SentinelX user {user.email}: {', '.join(sorted(changes)) or 'no fields'}",
+        actor=principal.email,
+        src_ip=client_ip(request),
+        details={"target_user": user.email, "role": changes.get("role"), "is_active": changes.get("is_active")},
+    )
     return UserOut.model_validate(user)
 
 
@@ -181,7 +204,7 @@ async def get_tenant_settings(
 async def update_tenant_settings(
     body: TenantSettingsIn,
     request: Request,
-    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.ADMIN_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     t = await db.get(Tenant, principal.tenant_id)
@@ -206,6 +229,19 @@ async def update_tenant_settings(
         tenant_id=t.id,
         details=body.model_dump(exclude_unset=True),
         source_ip=client_ip(request),
+    )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "tenant.settings",
+        f"{principal.email} changed organization settings: {', '.join(sorted(body.model_dump(exclude_unset=True)))}",
+        actor=principal.email,
+        src_ip=client_ip(request),
+        details={
+            "changed": sorted(body.model_dump(exclude_unset=True)),
+            "event_retention_days": changes.get("event_retention_days"),
+            "correlation_ignore_count": len(changes.get("correlation_ignore") or []),
+        },
     )
     return await get_tenant_settings(principal, db)
 
@@ -232,6 +268,9 @@ async def list_tokens(
             "prefix": t.prefix,
             "created_at": t.created_at,
             "last_used_at": t.last_used_at,
+            "last_used_ip": t.last_used_ip,
+            "allowed_sources": t.allowed_sources or [],
+            "allowed_cidrs": t.allowed_cidrs or [],
             "revoked": t.revoked_at is not None,
         }
         for t in rows
@@ -242,12 +281,32 @@ async def list_tokens(
 async def create_token(
     body: TokenIn,
     request: Request,
-    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.ADMIN_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
+    from sentinelx.ingestion.pipeline import TOKEN_SOURCES
+
+    bad = [x for x in body.allowed_sources if x not in TOKEN_SOURCES]
+    if bad:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown source(s) {bad}; use {', '.join(TOKEN_SOURCES)}"
+        )
+    cidrs: list[str] = []
+    for c in body.allowed_cidrs:
+        try:
+            cidrs.append(str(ipaddress.ip_network(c.strip(), strict=False)))
+        except ValueError as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"'{c}' is not an IP address or network") from e
     raw = "sxi_" + new_token(30)
     tok = IngestToken(
-        id=uuid.uuid4(), tenant_id=principal.tenant_id, name=body.name, prefix=raw[:10], token_hash=token_hash(raw)
+        id=uuid.uuid4(),
+        tenant_id=principal.tenant_id,
+        name=body.name,
+        prefix=raw[:10],
+        token_hash=token_hash(raw),
+        allowed_sources=sorted(set(body.allowed_sources)),
+        allowed_cidrs=cidrs,
+        known_ips=[],
     )
     db.add(tok)
     await audit(
@@ -258,8 +317,18 @@ async def create_token(
         actor=principal.email,
         actor_id=principal.user_id,
         tenant_id=principal.tenant_id,
-        details={"name": body.name},
+        details={"name": body.name, "allowed_sources": tok.allowed_sources, "allowed_cidrs": cidrs},
         source_ip=client_ip(request),
+    )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "ingest_token.create",
+        f"{principal.email} created ingest token {body.name}"
+        + ("" if tok.allowed_sources or cidrs else " with no source or network restriction"),
+        actor=principal.email,
+        src_ip=client_ip(request),
+        details={"token_name": body.name, "unrestricted": not (tok.allowed_sources or cidrs)},
     )
     return {"id": str(tok.id), "name": tok.name, "token": raw, "note": "Copy this token now — it is shown only once."}
 
@@ -268,7 +337,7 @@ async def create_token(
 async def revoke_token(
     token_id: uuid.UUID,
     request: Request,
-    principal: Principal = Depends(require(Perm.ADMIN_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.ADMIN_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     tok = await db.get(IngestToken, token_id)
@@ -284,6 +353,15 @@ async def revoke_token(
         actor_id=principal.user_id,
         tenant_id=principal.tenant_id,
         source_ip=client_ip(request),
+    )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "ingest_token.revoke",
+        f"{principal.email} revoked ingest token {tok.name}",
+        actor=principal.email,
+        src_ip=client_ip(request),
+        details={"token_name": tok.name},
     )
 
 
@@ -473,3 +551,14 @@ async def load_demo_data(
             source_ip=client_ip(request),
         )
     return {"queued": True, "message": "Demo Lab is being (re)built. It takes about 10–20 seconds."}
+
+
+@router.get("/audit-chain")
+async def audit_chain(principal: Principal = Depends(require(Perm.PLATFORM_MANAGE))) -> dict[str, Any]:
+    """Recompute the tamper-evident audit hash chain. Record ``head_hash`` outside SentinelX to also detect
+    a complete rewrite by someone with database access."""
+    from sentinelx.services.audit_chain import verify_chain
+
+    async with system_session() as s:
+        report = await verify_chain(s)
+    return {**report.as_dict(), "checked_at": datetime.now(UTC)}

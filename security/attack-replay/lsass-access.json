@@ -1,0 +1,47 @@
+{
+  "id": "lsass-access",
+  "name": "Credential dumping by opening LSASS memory",
+  "techniques": [
+    "T1003.001"
+  ],
+  "source": "wazuh",
+  "events": [
+    {
+      "@offset": -120,
+      "rule": {
+        "id": "61603",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "sysmon"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "WS-FIN-07",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "10",
+            "channel": "Microsoft-Windows-Sysmon/Operational",
+            "computer": "WS-FIN-07"
+          },
+          "eventdata": {
+            "sourceImage": "C:\\Users\\Public\\pd64.exe",
+            "targetImage": "C:\\Windows\\System32\\lsass.exe",
+            "grantedAccess": "0x1fffff"
+          }
+        }
+      },
+      "location": "EventChannel"
+    }
+  ],
+  "expect": [
+    "LSASS Memory Opened for Reading"
+  ],
+  "log_type": null,
+  "hunt": false
+}

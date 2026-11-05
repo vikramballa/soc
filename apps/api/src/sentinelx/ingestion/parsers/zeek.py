@@ -1,7 +1,8 @@
 """Zeek logs -> canonical events.
 
 Supports JSON (preferred, ``LogAscii::use_json=T``) and the default TSV format with ``#fields`` headers.
-Logs: conn, dns, http, ssl, ssh, files, notice.
+Logs: conn, dns, http, ssl, ssh, files, notice, and the Windows-protocol logs that show lateral
+movement: kerberos, ntlm, smb_mapping, smb_files, dce_rpc, rdp.
 Reference: https://docs.zeek.org/en/current/logs/index.html
 """
 
@@ -13,7 +14,22 @@ from typing import Any
 
 from sentinelx.domain.events import CanonicalEvent, deterministic_event_id, parse_timestamp, summarize
 
-SUPPORTED = {"conn", "dns", "http", "ssl", "ssh", "files", "notice"}
+SUPPORTED = {
+    "conn",
+    "dns",
+    "http",
+    "ssl",
+    "ssh",
+    "files",
+    "notice",
+    "kerberos",
+    "ntlm",
+    "smb_mapping",
+    "smb_files",
+    "dce_rpc",
+    "rdp",
+}
+_LATERAL_LOGS = {"kerberos", "ntlm", "smb_mapping", "smb_files", "dce_rpc", "rdp"}
 
 # conn_state values that indicate a failed / rejected / scan-like connection attempt
 FAILED_CONN_STATES = {"REJ", "S0", "RSTOS0", "RSTRH", "SH", "SHR", "OTH"}
@@ -58,6 +74,10 @@ def parse(rec: dict[str, Any], tenant_id: uuid.UUID, log_type: str | None = None
         raise ParseError("missing ts")
     uid = _g(rec, "uid") or _g(rec, "fuid") or ""
     native = f"{lt}|{uid}|{_g(rec, 'ts')}|{_g(rec, 'query') or _g(rec, 'note') or _g(rec, 'uri') or ''}"
+    if lt in _LATERAL_LOGS:  # several records per connection: add what distinguishes them
+        native += "|" + "|".join(
+            str(_g(rec, k) or "") for k in ("request_type", "service", "operation", "path", "name", "action")
+        )
     base: dict[str, Any] = {
         "event_id": deterministic_event_id(tenant_id, "zeek", native),
         "tenant_id": tenant_id,
@@ -98,7 +118,9 @@ def parse(rec: dict[str, Any], tenant_id: uuid.UUID, log_type: str | None = None
         )
     elif lt == "ssl":
         base.update(event_type="tls", event_action="tls_handshake", domain=_g(rec, "server_name"), protocol="tls")
-        base["metadata"].update(version=_g(rec, "version"), established=_g(rec, "established"), ja3=_g(rec, "ja3"))
+        base["metadata"].update(
+            version=_g(rec, "version"), established=_g(rec, "established"), ja3=_g(rec, "ja3"), ja4=_g(rec, "ja4")
+        )
     elif lt == "ssh":
         success = _g(rec, "auth_success")
         base.update(
@@ -140,10 +162,76 @@ def parse(rec: dict[str, Any], tenant_id: uuid.UUID, log_type: str | None = None
             dest_port=base["dest_port"] or _int(_g(rec, "p")),
         )
         base["metadata"].update(sub=_g(rec, "sub"))
+    elif lt in _LATERAL_LOGS:
+        _lateral(lt, rec, base)
 
     ev = CanonicalEvent(**base)
     ev.summary = summarize(ev)
     return ev
+
+
+def _ok(v: Any) -> str:
+    if v is True or v == "T":
+        return "success"
+    if v is False or v == "F":
+        return "failure"
+    return "unknown"
+
+
+def _lateral(lt: str, rec: dict[str, Any], base: dict[str, Any]) -> None:
+    meta = base["metadata"]
+    if lt == "kerberos":
+        client = str(_g(rec, "client") or "")
+        base.update(
+            event_type="authentication",
+            event_action=f"kerberos_{str(_g(rec, 'request_type') or 'req').lower()}",
+            outcome=_ok(_g(rec, "success")),
+            username=client.split("/", 1)[0] or None,
+            protocol="kerberos",
+        )
+        meta.update(
+            request_type=_g(rec, "request_type"),
+            service=_g(rec, "service"),
+            cipher=_g(rec, "cipher"),
+            error_msg=_g(rec, "error_msg"),
+        )
+    elif lt == "ntlm":
+        base.update(
+            event_type="authentication",
+            event_action="ntlm",
+            outcome=_ok(_g(rec, "success")),
+            username=_g(rec, "username"),
+            protocol="ntlm",
+        )
+        meta.update(
+            client_hostname=_g(rec, "hostname"),
+            domain=_g(rec, "domainname"),
+            server_name=_g(rec, "server_nb_computer_name"),
+        )
+    elif lt == "smb_mapping":
+        base.update(event_type="network", event_action="smb_mapping", protocol="smb", file_path=_g(rec, "path"))
+        meta.update(share_type=_g(rec, "share_type"), service=_g(rec, "service"))
+    elif lt == "smb_files":
+        path, name = _g(rec, "path") or "", _g(rec, "name") or ""
+        action = str(_g(rec, "action") or "SMB::FILE_OPEN").split("::")[-1].lower()
+        base.update(
+            event_type="file",
+            event_action=f"smb_{action}",
+            protocol="smb",
+            file_path=f"{path}\\{name}".strip("\\") if path else name or None,
+        )
+        meta.update(size=_g(rec, "size"), smb_action=_g(rec, "action"))
+    elif lt == "dce_rpc":
+        base.update(event_type="network", event_action="dce_rpc", protocol="dce_rpc")
+        meta.update(endpoint=_g(rec, "endpoint"), operation=_g(rec, "operation"), named_pipe=_g(rec, "named_pipe"))
+    elif lt == "rdp":
+        cookie = _g(rec, "cookie")
+        base.update(event_type="network", event_action="rdp", protocol="rdp", username=cookie)
+        meta.update(
+            result=_g(rec, "result"),
+            security_protocol=_g(rec, "security_protocol"),
+            client_name=_g(rec, "client_name"),
+        )
 
 
 def iter_tsv(lines: Iterator[str]) -> Iterator[dict[str, Any]]:

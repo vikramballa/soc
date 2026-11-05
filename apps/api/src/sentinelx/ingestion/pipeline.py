@@ -15,17 +15,25 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import func, literal_column, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinelx.domain.events import CanonicalEvent, deterministic_event_id, summarize
-from sentinelx.ingestion.parsers import suricata, wazuh, zeek
+from sentinelx.ingestion.parsers import canarytokens, suricata, wazuh, zeek
 from sentinelx.jobs.queue import enqueue
 from sentinelx.metrics import EVENTS_DUPLICATE, EVENTS_FAILED, EVENTS_INGESTED, INGEST_BATCH_DURATION, INGESTION_LATENCY
-from sentinelx.persistence.models import Asset, Identity, IngestionSource, QuarantinedEvent, SecurityEvent
+from sentinelx.persistence.models import (
+    Asset,
+    Identity,
+    IngestionSource,
+    QuarantinedEvent,
+    SecurityEvent,
+    TelemetrySource,
+)
 
-SOURCES = ("wazuh", "suricata", "zeek", "sentinelx")
+SOURCES = ("wazuh", "suricata", "zeek", "sentinelx", "canarytokens")
+TOKEN_SOURCES = SOURCES
 INSERT_CHUNK = 500  # keeps bind parameters well below PostgreSQL's 32767 limit
 DETECT_CHUNK = 1000
 
@@ -72,6 +80,8 @@ def parse_record(source: str, rec: dict[str, Any], tenant_id: uuid.UUID, log_typ
         return wazuh.parse(rec, tenant_id)
     if source == "sentinelx":
         return parse_canonical(rec, tenant_id)
+    if source == "canarytokens":
+        return canarytokens.parse(rec, tenant_id)
     raise ValueError(f"unknown source {source!r}")
 
 
@@ -148,8 +158,11 @@ async def ingest(
         EVENTS_DUPLICATE.labels(source=source).inc(res.duplicates)
 
         new = [events[i] for i in res.event_ids]
-        await _upsert_assets(session, tenant_id, new)
-        await _upsert_identities(session, tenant_id, new)
+        # SentinelX's own audit-style events describe operators, not monitored hosts and identities
+        observed = [e for e in new if not e.metadata.get("platform")]
+        await _upsert_assets(session, tenant_id, observed)
+        await _upsert_identities(session, tenant_id, observed)
+        await _touch_telemetry_sources(session, tenant_id, source, list(events.values()), now)
         if new:
             from sentinelx.ingestion.opensearch_sink import index_events
 
@@ -210,6 +223,64 @@ async def _upsert_assets(session: AsyncSession, tenant_id: uuid.UUID, events: li
                 "ARRAY(SELECT DISTINCT x FROM unnest(array_cat(assets.ip_addresses, excluded.ip_addresses)) AS x"
                 " ORDER BY x)"
             ),
+        },
+    )
+    await session.execute(stmt)
+
+
+def sender_key(source: str, ev: CanonicalEvent) -> str | None:
+    """Which agent or sensor sent this event. Network sensors report traffic of many hosts, so their
+    events are keyed by sensor, not by the (attributed) host the traffic belongs to."""
+    if ev.metadata.get("platform") or source == "canarytokens":
+        return None  # SentinelX's own records and tripwire webhooks have no steady cadence
+    if source == "wazuh":
+        if ev.hostname and ev.metadata.get("hostname_source") != "asset_ip_map":
+            return ev.hostname[:255]
+        return "wazuh manager"
+    raw_host = ev.raw_event.get("host") if isinstance(ev.raw_event.get("host"), str) else None
+    return (ev.metadata.get("sensor") or raw_host or f"{source} sensor")[:255]
+
+
+async def _touch_telemetry_sources(
+    session: AsyncSession, tenant_id: uuid.UUID, source: str, events: list[CanonicalEvent], now: datetime
+) -> None:
+    """Liveness per sender (wall clock of receipt, not event time, so replays don't look fresh)."""
+    senders: dict[str, dict[str, Any]] = {}
+    for ev in events:
+        key = sender_key(source, ev)
+        if key is None:
+            continue
+        cur = senders.setdefault(key, {"n": 0, "last": ev.timestamp})
+        cur["n"] += 1
+        cur["last"] = max(cur["last"], ev.timestamp)
+    if not senders:
+        return
+    rows = [
+        {
+            "id": uuid.uuid4(),
+            "tenant_id": tenant_id,
+            "source_type": source[:16],
+            "hostname": host,
+            "last_seen": now,
+            "last_event_at": v["last"],
+            "event_count": v["n"],
+        }
+        for host, v in senders.items()
+    ]
+    stmt = pg_insert(TelemetrySource).values(rows)
+    gap = text("extract(epoch from (excluded.last_seen - telemetry_sources.last_seen))")
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["tenant_id", "source_type", "hostname"],
+        set_={
+            "last_seen": stmt.excluded.last_seen,
+            "last_event_at": func.greatest(TelemetrySource.last_event_at, stmt.excluded.last_event_at),
+            "event_count": TelemetrySource.event_count + stmt.excluded.event_count,
+            # exponentially weighted mean of the gap between receipts: the sender's normal cadence
+            "avg_gap_seconds": literal_column(
+                "CASE WHEN telemetry_sources.avg_gap_seconds IS NULL "
+                f"THEN {gap.text} ELSE 0.8 * telemetry_sources.avg_gap_seconds + 0.2 * {gap.text} END"
+            ),
+            "silent_since": None,
         },
     )
     await session.execute(stmt)

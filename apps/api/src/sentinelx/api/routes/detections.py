@@ -12,13 +12,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentinelx.api.deps import Principal, client_ip, get_db, require
+from sentinelx.api.deps import Principal, client_ip, get_db, require, require_fresh
 from sentinelx.api.schemas import RuleDetail, RuleOut, RulePatch
 from sentinelx.config import get_settings
 from sentinelx.detection.engine import (
     CUSTOM_PREFIX,
     event_to_dict,
     get_rules,
+    protected_rule_uids,
     refresh_custom_rules,
     sync_rules_to_db,
 )
@@ -26,6 +27,7 @@ from sentinelx.detection.sigma.rules import content_hash, load_rules
 from sentinelx.persistence.db import system_session
 from sentinelx.persistence.models import Alert, DetectionRule, RuleVersion, SecurityEvent, Tenant
 from sentinelx.security.rbac import Perm
+from sentinelx.services import selfmon
 from sentinelx.services.audit import audit
 
 router = APIRouter(prefix="/detections", tags=["detections"])
@@ -139,13 +141,18 @@ async def toggle_rule(
     rule_uid: str,
     body: RulePatch,
     request: Request,
-    principal: Principal = Depends(require(Perm.RULE_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.RULE_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Enable/disable a rule for the current organization only (the shared rule catalogue is untouched)."""
     r = (await db.execute(select(DetectionRule).where(DetectionRule.rule_uid == rule_uid))).scalar_one_or_none()
     if r is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rule not found")
+    if not body.enabled and rule_uid in protected_rule_uids():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This rule watches SentinelX itself for tampering and cannot be turned off",
+        )
     t = await db.get(Tenant, principal.tenant_id)
     assert t is not None
     disabled = set((t.settings or {}).get("disabled_rules", []))
@@ -163,6 +170,16 @@ async def toggle_rule(
         actor_id=principal.user_id,
         tenant_id=principal.tenant_id,
         source_ip=client_ip(request),
+    )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "rule.enable" if body.enabled else "rule.disable",
+        f"{principal.email} {'enabled' if body.enabled else 'disabled'} detection rule {r.title}",
+        actor=principal.email,
+        src_ip=client_ip(request),
+        severity=20 if body.enabled else 40,
+        details={"rule_uid": rule_uid, "rule_title": r.title, "rule_level": r.level},
     )
     return {
         **RuleOut.model_validate(r).model_dump(),
@@ -298,7 +315,7 @@ async def update_rule(
     rule_uid: str,
     body: RuleIn,
     request: Request,
-    principal: Principal = Depends(require(Perm.PLATFORM_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.PLATFORM_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     v = await _validate_custom(db, body.content, editing=rule_uid)
@@ -337,6 +354,15 @@ async def update_rule(
             details={"version": row.version},
             source_ip=client_ip(request),
         )
+        await selfmon.emit(
+            db,
+            principal.tenant_id,
+            "rule.update",
+            f"{principal.email} changed custom detection rule {row.title}",
+            actor=principal.email,
+            src_ip=client_ip(request),
+            details={"rule_uid": rule_uid, "version": row.version},
+        )
     return {"rule_uid": rule_uid, "version": row.version}
 
 
@@ -344,7 +370,7 @@ async def update_rule(
 async def delete_rule(
     rule_uid: str,
     request: Request,
-    principal: Principal = Depends(require(Perm.PLATFORM_MANAGE)),
+    principal: Principal = Depends(require_fresh(Perm.PLATFORM_MANAGE)),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     row = (await db.execute(select(DetectionRule).where(DetectionRule.rule_uid == rule_uid))).scalar_one_or_none()
@@ -360,6 +386,16 @@ async def delete_rule(
         actor_id=principal.user_id,
         tenant_id=principal.tenant_id,
         source_ip=client_ip(request),
+    )
+    await selfmon.emit(
+        db,
+        principal.tenant_id,
+        "rule.delete",
+        f"{principal.email} deleted custom detection rule {row.title}",
+        actor=principal.email,
+        src_ip=client_ip(request),
+        severity=40,
+        details={"rule_uid": rule_uid, "rule_title": row.title},
     )
 
 

@@ -1,0 +1,28 @@
+{
+  "id": "admin-share-payload",
+  "name": "Payload copied to ADMIN$ and a remote service created",
+  "techniques": [
+    "T1021.002",
+    "T1569.002"
+  ],
+  "source": "zeek",
+  "log_type": "smb_files",
+  "events": [
+    {
+      "@offset": -90,
+      "uid": "Csmb1",
+      "id.orig_h": "10.20.30.17",
+      "id.orig_p": 50200,
+      "id.resp_h": "10.20.30.40",
+      "id.resp_p": 445,
+      "action": "SMB::FILE_WRITE",
+      "path": "\\\\10.20.30.40\\ADMIN$",
+      "name": "update_helper.exe",
+      "size": 73802
+    }
+  ],
+  "expect": [
+    "Executable Written to an Administrative Share"
+  ],
+  "hunt": false
+}

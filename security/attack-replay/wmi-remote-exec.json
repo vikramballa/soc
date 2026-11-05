@@ -1,0 +1,48 @@
+{
+  "id": "wmi-remote-exec",
+  "name": "Command shell spawned by WMI (wmiexec)",
+  "techniques": [
+    "T1047"
+  ],
+  "source": "wazuh",
+  "events": [
+    {
+      "@offset": -120,
+      "rule": {
+        "id": "61603",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "sysmon"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "SRV-APP-02",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "1",
+            "channel": "Microsoft-Windows-Sysmon/Operational",
+            "computer": "SRV-APP-02"
+          },
+          "eventdata": {
+            "image": "C:\\Windows\\System32\\cmd.exe",
+            "commandLine": "cmd.exe /Q /c whoami 1> \\\\127.0.0.1\\ADMIN$\\__1730000000 2>&1",
+            "parentImage": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
+            "user": "CORP\\jdoe"
+          }
+        }
+      },
+      "location": "EventChannel"
+    }
+  ],
+  "expect": [
+    "Command Shell Spawned by WMI"
+  ],
+  "log_type": null,
+  "hunt": false
+}

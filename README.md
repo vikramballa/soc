@@ -43,14 +43,18 @@ detection keeps working even if the AI is switched off.
 | | |
 |---|---|
 | **Multi-source ingestion** | Wazuh (indexer polling, `alerts.json` tailing or HTTP push), Suricata EVE JSON, Zeek JSON and TSV. Malformed events are quarantined, never silently dropped, and re-ingesting the same data is idempotent. |
-| **Sigma detection** | 23 bundled Sigma rules and 7 Sigma correlation rules, plus behavioral checks (login from a new source, DGA-looking domains, threat-intel matches). Write your own rules in the UI and dry-run them against stored events before enabling. |
+| **Sigma detection** | 79 bundled Sigma rules and 9 correlation rules covering credential theft (Kerberoasting, DCSync, LSASS), lateral movement, persistence, defense impairment and exfiltration, plus behavioral checks. Write your own rules in the UI, or import SigmaHQ rules with `sentinelx sigma-import`. |
+| **Beyond signatures** | RITA-style C2 beacon scoring, DNS-tunnel detection, first-seen process lineages / JA4 TLS fingerprints / user agents, first logons to new hosts, and alert-storm detection. |
+| **Sensor tamper detection** | Every agent and sensor has a learned cadence. When one goes quiet you get an alert, raised to high if it happened right after a detection on that host. See the Telemetry Health page. |
+| **Deception** | Honeytokens (decoy accounts, hosts, IPs, files, fake credentials) and a Canarytokens webhook. Any touch is a critical incident. |
+| **Proven coverage** | 24 synthetic attack scenarios are replayed through the real pipeline in CI (`sentinelx validate-detections`); the ATT&CK page marks techniques proven by a replay. |
 | **Incident correlation** | Alerts that share entities within a time window become one incident. Shared infrastructure such as DNS servers and proxies is detected and suppressed, so unrelated activity is never glued together. |
 | **Explainable risk** | Each score is a sum of capped contributors: detection severity, asset criticality, threat intel, correlation strength, ML anomaly, ATT&CK stage and more. The breakdown is shown on every incident. |
 | **MITRE ATT&CK** | Full v19.2 catalog. Techniques are only marked as observed when a rule or sensor provided evidence. |
 | **Threat intelligence** | Import CSV, plain-text or STIX 2.1 feeds, keep a watchlist, and optionally enrich from MISP. |
 | **Behavioral ML** | An Isolation Forest baseline per host, with feature-level explanations. It can raise risk but can never create a serious incident on its own. |
 | **Local AI analyst** | Summarizes an incident, proposes a verdict and next steps, and cites the source event for every claim. Answers with invented events, indicators or ATT&CK IDs fail validation. Text in logs that looks like a prompt injection is withheld from the model and flagged. |
-| **Built for teams** | Five roles from Viewer to Super Admin, multi-tenant organizations isolated by PostgreSQL row-level security, an append-only audit log, and optional Keycloak single sign-on. |
+| **Built for teams** | Five roles from Viewer to Super Admin, multi-tenant organizations isolated by PostgreSQL row-level security, a hash-chained audit log, two-step verification, and optional Keycloak single sign-on. |
 | **Reports** | Export an incident report that keeps observed evidence, automated inference and AI output clearly separate. |
 
 <table>
@@ -99,7 +103,7 @@ cd soc
 cp .env.example .env
 ```
 
-Fill in `APP_SECRET`, `POSTGRES_SUPERUSER_PASSWORD` and `SENTINELX_DB_PASSWORD` in `.env`
+Fill in `APP_SECRET`, `POSTGRES_SUPERUSER_PASSWORD`, `SENTINELX_DB_PASSWORD` and `SENTINELX_OWNER_DB_PASSWORD` in `.env`
 (`openssl rand -hex 32` gives you a good value for each). Then:
 
 ```bash
@@ -204,6 +208,9 @@ uv run sentinelx demo            # rebuild the demo lab
 uv run sentinelx create-user analyst@example.com --role SECURITY_ANALYST
 uv run sentinelx ingest-file suricata /var/log/suricata/eve.json
 uv run sentinelx ai-eval         # measure the AI analyst: validity, grounding, injection resistance
+uv run sentinelx validate-detections   # replay the synthetic attack scenarios; fails if one is missed
+uv run sentinelx audit-verify    # check the audit hash chain; record the printed head hash elsewhere
+uv run sentinelx sigma-import ~/src/sigma/rules --min-level high   # import SigmaHQ rules (validated)
 ```
 
 > **macOS note:** if `sentinelx` isn't found inside `uv run`, use
@@ -236,12 +243,18 @@ Prometheus metrics at `/metrics`.
 
 - **Tenant isolation in two layers.** Every query filters by tenant, and PostgreSQL row-level security
   rejects other tenants' rows even if an application filter were forgotten.
-- **Least privilege.** The app connects as a non-superuser role. Five roles (`VIEWER`, `IT_OPERATOR`,
+- **Least privilege.** The app connects as a non-superuser role that owns no tables, so even a compromised
+  app process cannot disable row-level security or the audit triggers ([ADR-013](docs/adr/ADR-013-least-privilege-database-roles.md);
+  existing installs: `PGUSER=<superuser> ./scripts/harden-db.sh`). Five roles (`VIEWER`, `IT_OPERATOR`,
   `SECURITY_ANALYST`, `TENANT_ADMIN`, `SUPER_ADMIN`) are enforced server-side on every endpoint; the UI only
   hides what you can't use.
 - **Sessions.** Argon2 password hashing, server-side sessions in HttpOnly cookies, a CSRF header check, login
-  lockout and rate limiting.
-- **Audit.** An append-only audit log, enforced by a database trigger.
+  lockout, rate limiting, and two-step verification (TOTP), which is required for admins in production. Sensitive
+  changes ask for your password again.
+- **Audit.** An append-only, hash-chained audit log: a trigger and missing privileges block edits, and
+  `sentinelx audit-verify` detects them anyway.
+- **Watching the watcher.** Rule changes, role grants, token misuse and failed second factors become events
+  that SentinelX's own tamper rules detect; those rules cannot be switched off.
 - **No remote execution.** Response actions are limited to safe, auditable steps such as tasks and watchlist
   entries. SentinelX never runs commands on your hosts.
 - **AI guardrails.** The model only sees a minimal, sanitized slice of evidence, cannot change scores or take

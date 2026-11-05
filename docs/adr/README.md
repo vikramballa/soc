@@ -12,3 +12,4 @@
 - [ADR-010-multi-tenancy](ADR-010-multi-tenancy.md) — Multi-tenancy with row-level security
 - [ADR-011-ai-grounding](ADR-011-ai-grounding.md) — Evidence-grounding strategy for the AI analyst
 - [ADR-012-local-auth-and-oidc](ADR-012-local-auth-and-oidc.md) — Local accounts by default, Keycloak OIDC optional (BFF pattern)
+- [ADR-013-least-privilege-database-roles](ADR-013-least-privilege-database-roles.md) — Schema-owner vs runtime role; hash-chained audit trail

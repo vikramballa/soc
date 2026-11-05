@@ -53,6 +53,10 @@ async def matrix(
         ).scalars()
         for t in row
     }
+    from sentinelx.detection.replay import replayed_techniques
+
+    # techniques with a synthetic attack replay that CI proves is detected (security/attack-replay)
+    tested = replayed_techniques() & covered
     observed = {t: {"incidents": n, "last_observed": last} for t, n, last in inc_rows}
     evidence = {t: int(n or 0) for t, n in ev_rows}
     tactics = []
@@ -71,6 +75,7 @@ async def matrix(
                         "evidence": sum(evidence.get(x, 0) for x in [t.id, *[s.id for s in subs]]),
                         "last_observed": max((observed[x]["last_observed"] for x in obs_ids), default=None),
                         "covered": t.id in covered or any(s.id in covered for s in subs),
+                        "tested": t.id in tested or any(s.id in tested for s in subs),
                         "observed_subtechniques": [x for x in obs_ids if x != t.id],
                     }
                 )
@@ -82,6 +87,7 @@ async def matrix(
         "tactics": tactics,
         "observed_total": len(observed),
         "covered_total": len(covered),
+        "tested_total": len(tested),
     }
 
 

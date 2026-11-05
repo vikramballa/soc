@@ -1,0 +1,56 @@
+{
+  "id": "honeytoken-account",
+  "name": "Sign-in attempt with a decoy account",
+  "techniques": [
+    "T1078"
+  ],
+  "source": "wazuh",
+  "setup": {
+    "honeytokens": [
+      {
+        "kind": "account",
+        "value": "svc_backup_legacy"
+      }
+    ]
+  },
+  "events": [
+    {
+      "@offset": -120,
+      "rule": {
+        "id": "60000",
+        "level": 5,
+        "description": "Windows event",
+        "groups": [
+          "windows",
+          "windows_security",
+          "authentication_failed"
+        ]
+      },
+      "agent": {
+        "id": "017",
+        "name": "SRV-FILE-01",
+        "ip": "10.20.30.17"
+      },
+      "data": {
+        "win": {
+          "system": {
+            "eventID": "4625",
+            "channel": "Security",
+            "computer": "SRV-FILE-01"
+          },
+          "eventdata": {
+            "targetUserName": "svc_backup_legacy",
+            "ipAddress": "10.20.30.17",
+            "logonType": "3"
+          }
+        }
+      },
+      "location": "EventChannel"
+    }
+  ],
+  "expect": [
+    "Decoy (Honeytoken) Touched"
+  ],
+  "log_type": null,
+  "hunt": false
+}

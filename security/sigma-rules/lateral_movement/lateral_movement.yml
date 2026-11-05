@@ -1,0 +1,192 @@
+title: PsExec-Style Service Installed
+id: b402d37e-5d34-4b8e-b992-7f262d6eb091
+status: stable
+description: A service was installed whose binary is a known remote-execution helper (PsExec, PAExec, RemCom, Impacket smbexec/psexec). Attackers use these to run commands on other machines with stolen credentials.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: windows
+  service: system
+detection:
+  selection_event:
+    EventID: 7045
+  selection_name:
+    - ServiceName|contains:
+        - 'PSEXESVC'
+        - 'PAExec'
+        - 'RemComSvc'
+        - 'BTOBTO'
+    - ImagePath|contains:
+        - 'PSEXESVC'
+        - 'PAExec'
+        - 'RemCom'
+        - '%COMSPEC%'
+        - 'cmd.exe /Q /c'
+        - '\\127.0.0.1\ADMIN$'
+  condition: selection_event and selection_name
+falsepositives:
+  - Administrators using Sysinternals PsExec deliberately
+level: high
+tags:
+  - attack.lateral_movement
+  - attack.t1021.002
+  - attack.execution
+  - attack.t1569.002
+---
+title: Executable Written to an Administrative Share
+id: b2c25a55-3ac2-455c-82a3-3608fa91bf03
+status: stable
+description: Zeek saw an executable or script written over SMB to ADMIN$, C$ or IPC$. Copying a payload to a remote admin share is the first step of PsExec-style lateral movement.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: zeek
+  service: smb_files
+detection:
+  selection_share:
+    file_path|contains:
+      - '\ADMIN$'
+      - '\C$'
+  selection_ext:
+    file_path|endswith:
+      - '.exe'
+      - '.dll'
+      - '.bat'
+      - '.ps1'
+      - '.vbs'
+  selection_write:
+    event_action:
+      - smb_file_write
+      - smb_file_open
+  condition: all of selection_*
+falsepositives:
+  - Software deployment tools (SCCM, PDQ) - exclude their servers
+level: high
+tags:
+  - attack.lateral_movement
+  - attack.t1021.002
+---
+title: Remote Service or Scheduled Task Created Over RPC
+id: c17568f5-71c0-4698-865a-dd29d251b49f
+status: stable
+description: Zeek saw a remote procedure call that creates a service (svcctl CreateService) or registers a scheduled task (ITaskSchedulerService / atsvc) on another machine - common remote-execution techniques.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: zeek
+  service: dce_rpc
+detection:
+  selection:
+    operation:
+      - CreateServiceW
+      - CreateServiceA
+      - SchRpcRegisterTask
+      - NetrJobAdd
+  condition: selection
+falsepositives:
+  - Management servers that deploy services remotely
+level: high
+tags:
+  - attack.lateral_movement
+  - attack.t1021
+  - attack.execution
+  - attack.t1569.002
+  - attack.t1053.005
+---
+title: Command Shell Spawned by WMI
+id: dd428d35-c40d-42fe-beed-ff64fceda0b1
+status: stable
+description: The WMI provider host started a command shell or PowerShell. This is how remote WMI execution (wmic /node, Impacket wmiexec, CrackMapExec) looks on the target.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    ParentImage|endswith: '\WmiPrvSE.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\mshta.exe'
+      - '\rundll32.exe'
+  condition: selection
+falsepositives:
+  - Management agents that use WMI to run scripts
+level: high
+tags:
+  - attack.execution
+  - attack.t1047
+  - attack.lateral_movement
+---
+title: Command Run Through Windows Remote Management
+id: 99a3af6a-8c56-4401-9d1c-15cdd26a4596
+status: stable
+description: The WinRM plugin host (wsmprovhost.exe) started a program - a remote PowerShell session (Enter-PSSession, Invoke-Command, Evil-WinRM) is running commands on this host.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    ParentImage|endswith: '\wsmprovhost.exe'
+  filter:
+    Image|endswith: '\conhost.exe'
+  condition: selection and not filter
+falsepositives:
+  - Administrators using PowerShell remoting
+level: medium
+tags:
+  - attack.lateral_movement
+  - attack.t1021.006
+---
+title: Possible Pass-the-Hash Logon
+id: 2109ebb6-4f00-4fa5-ae9c-9e9896078540
+status: stable
+description: A logon of type 9 (NewCredentials) through the seclogo process - the signature of Mimikatz sekurlsa::pth and similar tools that log on with a stolen NTLM hash.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4624
+    LogonType: 9
+    LogonProcessName: seclogo
+  condition: selection
+falsepositives:
+  - runas /netonly (rare in most environments)
+level: high
+tags:
+  - attack.lateral_movement
+  - attack.t1550.002
+---
+title: Remote Access Tool Executed
+id: e52d60a1-8100-4d92-b27d-6308ae576a5a
+status: stable
+description: A commercial remote-access tool started. Attackers install these for hands-on-keyboard access that blends in with IT support.
+author: SentinelX
+date: 2026-11-05
+logsource:
+  category: process_creation
+detection:
+  selection:
+    Image|endswith:
+      - '\AnyDesk.exe'
+      - '\TeamViewer.exe'
+      - '\ScreenConnect.ClientService.exe'
+      - '\atera_agent.exe'
+      - '\rustdesk.exe'
+      - '\splashtop.exe'
+      - '\ngrok.exe'
+      - '/ngrok'
+  condition: selection
+falsepositives:
+  - Sanctioned IT support tools (exclude the approved one)
+level: medium
+tags:
+  - attack.command_and_control
+  - attack.t1219
